@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KhataSnap – History</title>
+<link rel="stylesheet" href="/static/css/base.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-logo"><div class="brand">🧾 KhataSnap</div><div class="sub">Inventory · Finals</div></div>
+  <div class="nav-section">
+    <div class="nav-label">Main</div>
+    <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+    <a href="/products" class="nav-item"><span class="nav-icon">📦</span><span>Products</span></a>
+    <a href="/stock" class="nav-item"><span class="nav-icon">🔄</span><span>Stock</span></a>
+    <a href="/low-stock" class="nav-item"><span class="nav-icon">⚠️</span><span>Low Stock</span></a>
+    <a href="/history" class="nav-item active"><span class="nav-icon">📋</span><span>History</span></a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Setup</div>
+    <a href="/categories" class="nav-item"><span class="nav-icon">🏷️</span><span>Categories</span></a>
+    <a href="/suppliers" class="nav-item"><span class="nav-icon">🚚</span><span>Suppliers</span></a>
+    <a href="/test" class="nav-item"><span class="nav-icon">🧪</span><span>API Test</span></a>
+    <a href="/sre" class="nav-item"><span class="nav-icon">🔁</span><span>SRE Console</span></a>
+    <a href="/sre/smart" class="nav-item nav-item-smart"><span class="nav-icon">🧠</span><span>Smart SRE</span></a>
+    <a href="/api-docs" class="nav-item"><span class="nav-icon">📖</span><span>API Docs</span></a>
+  </div>
+  <div class="sidebar-bottom"><div class="server-status"><span class="sdot" id="sdot"></span><span id="slabel">Connecting…</span></div></div>
+</nav>
+
+<div class="main">
+  <div class="page-header">
+    <div class="page-title">Inventory History · इन्वेंटरी इतिहास</div>
+    <div class="page-sub">All stock updates and transactions</div>
+  </div>
+
+  <div class="toolbar">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="searchInp" placeholder="Search product…" oninput="renderTable()">
+    </div>
+    <select class="filt" id="sourceFilter" onchange="loadLogs()">
+      <option value="">All Sources</option>
+      <option value="manual">Manual</option>
+      <option value="ocr1">OCR 1</option>
+      <option value="ocr2">OCR 2</option>
+      <option value="voice">Voice</option>
+      <option value="calculator-high">Calculator</option>
+      <option value="sre">SRE</option>
+    </select>
+    <select class="filt" id="actionFilter" onchange="renderTable()">
+      <option value="">All Actions</option>
+      <option value="stock_in">Stock In</option>
+      <option value="stock_out">Stock Out</option>
+      <option value="adjustment">Adjustment</option>
+    </select>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Transaction ID</th><th>Product</th><th>Change</th>
+          <th>Action</th><th>Source</th><th>Before</th><th>After</th><th>Time</th>
+        </tr></thead>
+        <tbody id="logsTable"></tbody>
+      </table>
+      <div class="empty hidden" id="emptyMsg"><div class="empty-icon">📋</div><p>No history yet</p></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/js/app.js"></script>
+<script>
+let logs = [];
+
+async function loadLogs() {
+  const src  = document.getElementById('sourceFilter').value;
+  const path = src ? `/inventory/logs?source=${src}&limit=200` : '/inventory/logs?limit=200';
+  logs = await apiFetch(path);
+  if (logs) renderTable();
+}
+
+function renderTable() {
+  const q      = document.getElementById('searchInp').value.toLowerCase();
+  const action = document.getElementById('actionFilter').value;
+  const list   = logs.filter(l =>
+    (l.product_name||'').toLowerCase().includes(q) &&
+    (!action || l.action_type === action)
+  );
+  const tbody = document.getElementById('logsTable');
+  document.getElementById('emptyMsg').classList.toggle('hidden', list.length > 0);
+  tbody.innerHTML = list.map(l => {
+    const sign  = l.qty_change > 0 ? '+' : '';
+    const color = l.qty_change > 0 ? 'var(--green)' : 'var(--red)';
+    const time  = new Date(l.created_at).toLocaleString('en-IN');
+    const src   = l.source || '—';
+    return `<tr>
+      <td class="mono" style="font-size:10px;color:var(--muted)">${x(l.transaction_id)}</td>
+      <td><b>${x(l.product_name||'—')}</b></td>
+      <td class="mono" style="color:${color};font-weight:800">${sign}${l.qty_change}</td>
+      <td><span class="badge b-gray">${x(l.action_type)}</span></td>
+      <td><span class="badge b-blue">${x(src)}</span></td>
+      <td class="mono" style="color:var(--muted)">${l.old_qty ?? '—'}</td>
+      <td class="mono" style="font-weight:700">${l.new_qty ?? '—'}</td>
+      <td style="font-size:11px;color:var(--muted)">${time}</td>
+    </tr>`;
+  }).join('');
+}
+
+loadLogs();
+</script>
+</body>
+</html>

@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KhataSnap – Products</title>
+<link rel="stylesheet" href="/static/css/base.css">
+</head>
+<body>
+  <!-- ALIAS MODAL -->
+<div class="overlay" id="aliasModal">
+  <div class="modal" style="width:480px">
+    <div class="modal-header">
+      <span class="modal-title" id="aliasModalTitle">🏷️ Manage Aliases</span>
+      <button class="modal-close" onclick="close_('aliasModal')">✕</button>
+    </div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:16px">
+      Add nicknames so OCR/ASR/Calculator can match this product even with typos or short names.
+      <br>उत्पाद के वैकल्पिक नाम जोड़ें।
+    </div>
+
+    <div id="existingAliases" style="margin-bottom:16px"></div>
+
+    <div class="fg">
+      <label>New Alias · नया उपनाम</label>
+      <div style="display:flex;gap:8px">
+        <input id="aliasInput" placeholder="e.g. parle g, PG, पारले जी" style="flex:1;padding:9px 12px;background:var(--bg);border:1.5px solid var(--border);border-radius:9px;font-family:inherit;font-size:13px;outline:none">
+        <button class="btn btn-primary" onclick="addAlias()">➕ Add</button>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-cancel" onclick="close_('aliasModal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="brand">🧾 KhataSnap</div>
+    <div class="sub">Inventory · Finals</div>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Main</div>
+    <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+    <a href="/products" class="nav-item active"><span class="nav-icon">📦</span><span>Products</span></a>
+    <a href="/stock" class="nav-item"><span class="nav-icon">🔄</span><span>Stock</span></a>
+    <a href="/low-stock" class="nav-item"><span class="nav-icon">⚠️</span><span>Low Stock</span></a>
+    <a href="/history" class="nav-item"><span class="nav-icon">📋</span><span>History</span></a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Setup</div>
+    <a href="/categories" class="nav-item"><span class="nav-icon">🏷️</span><span>Categories</span></a>
+    <a href="/suppliers" class="nav-item"><span class="nav-icon">🚚</span><span>Suppliers</span></a>
+    <a href="/test" class="nav-item"><span class="nav-icon">🧪</span><span>API Test</span></a>
+    <a href="/sre" class="nav-item"><span class="nav-icon">🔁</span><span>SRE Console</span></a>
+    <a href="/sre/smart" class="nav-item nav-item-smart"><span class="nav-icon">🧠</span><span>Smart SRE</span></a>
+    <a href="/api-docs" class="nav-item"><span class="nav-icon">📖</span><span>API Docs</span></a>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="server-status">
+      <span class="sdot" id="sdot"></span>
+      <span id="slabel">Connecting…</span>
+    </div>
+  </div>
+</nav>
+
+<div class="main">
+  <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">
+    <div>
+      <div class="page-title">Products · उत्पाद</div>
+      <div class="page-sub">Manage all inventory products</div>
+    </div>
+    <button class="btn btn-primary" onclick="openAdd()">➕ Add Product</button>
+  </div>
+
+  <div class="toolbar">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="searchInp" placeholder="Search products…" oninput="renderTable()">
+    </div>
+    <select class="filt" id="catFilter" onchange="renderTable()"><option value="">All Categories</option></select>
+    <select class="filt" id="stockFilter" onchange="renderTable()">
+      <option value="">All Stock</option>
+      <option value="ok">In Stock</option>
+      <option value="low">Low Stock</option>
+      <option value="out">Out of Stock</option>
+    </select>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Product</th><th>Category</th><th>SKU</th>
+          <th>Buy Price</th><th>Sell Price</th><th>Margin</th>
+          <th>Qty</th><th>Status</th><th>Actions</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="empty hidden" id="emptyMsg">
+        <div class="empty-icon">📦</div>
+        <p>No products found. Add your first product!</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ADD / EDIT MODAL -->
+<div class="overlay" id="productModal">
+  <div class="modal" style="width:620px">
+    <div class="modal-header">
+      <span class="modal-title" id="modalTitle">➕ Add Product</span>
+      <button class="modal-close" onclick="close_('productModal')">✕</button>
+    </div>
+
+    <div class="form-grid">
+      <div class="fg">
+        <label>Product Name * · उत्पाद का नाम</label>
+        <input id="fName" placeholder="e.g. Parle-G Biscuit 100g">
+      </div>
+      <div class="form-row">
+        <div class="fg">
+          <label>Category · श्रेणी</label>
+          <select id="fCat"><option value="">-- Select --</option></select>
+        </div>
+        <div class="fg">
+          <label>Brand · ब्रांड</label>
+          <input id="fBrand" placeholder="e.g. Parle">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="fg">
+          <label>SKU (auto-generated)</label>
+          <input id="fSku" placeholder="Leave blank to auto-generate">
+        </div>
+        <div class="fg">
+          <label>Barcode · बारकोड</label>
+          <input id="fBarcode" placeholder="Optional">
+        </div>
+      </div>
+      <div class="form-row-3">
+        <div class="fg">
+          <label>Purchase Price ₹ *</label>
+          <input id="fPurchasePrice" type="number" min="0" step="0.5" placeholder="0">
+        </div>
+        <div class="fg">
+          <label>Selling Price ₹ *</label>
+          <input id="fSellingPrice" type="number" min="0" step="0.5" placeholder="0">
+        </div>
+        <div class="fg">
+          <label>MRP ₹</label>
+          <input id="fMrp" type="number" min="0" step="0.5" placeholder="0">
+        </div>
+      </div>
+      <div class="form-row-3">
+        <div class="fg">
+          <label>Current Qty * · वर्तमान मात्रा</label>
+          <input id="fQty" type="number" min="0" placeholder="0">
+        </div>
+        <div class="fg">
+          <label>Unit Type · इकाई</label>
+          <select id="fUnit">
+            <option value="pcs">pcs</option>
+            <option value="kg">kg</option>
+            <option value="g">g</option>
+            <option value="L">L</option>
+            <option value="ml">ml</option>
+            <option value="box">box</option>
+            <option value="pack">pack</option>
+          </select>
+        </div>
+        <div class="fg">
+          <label>Min Stock · न्यूनतम स्टॉक</label>
+          <input id="fMinStock" type="number" min="0" placeholder="5">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="fg">
+          <label>Supplier · आपूर्तिकर्ता</label>
+          <select id="fSupplier"><option value="">-- None --</option></select>
+        </div>
+        <div class="fg">
+          <label>Expiry Date · समाप्ति तिथि</label>
+          <input id="fExpiry" type="date">
+        </div>
+      </div>
+      <div class="fg">
+        <label>Notes · नोट्स</label>
+        <textarea id="fNotes" placeholder="Optional notes…"></textarea>
+      </div>
+
+      <!-- PROFIT PREVIEW -->
+      <div style="background:var(--surface2);border-radius:10px;padding:12px 16px;font-size:13px">
+        💰 Profit Margin: <b id="marginPreview" style="color:var(--green)">—</b>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-cancel" onclick="close_('productModal')">Cancel</button>
+      <button class="btn btn-primary btn-submit" onclick="saveProduct()">💾 Save Product</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/js/app.js"></script>
+<script>
+let products   = [];
+let categories = [];
+let suppliers  = [];
+let editId     = null;
+
+async function loadAll() {
+  [products, categories, suppliers] = await Promise.all([
+    apiFetch('/products'),
+    apiFetch('/categories'),
+    apiFetch('/suppliers')
+  ]);
+  if (!products || !categories) return;
+
+  // Populate category filter + form select
+  const catFilter = document.getElementById('catFilter');
+  const fCat      = document.getElementById('fCat');
+  const fSupplier = document.getElementById('fSupplier');
+
+  categories.forEach(c => {
+    catFilter.innerHTML += `<option value="${c.id}">${x(c.name)}</option>`;
+    fCat.innerHTML      += `<option value="${c.id}">${x(c.name)}</option>`;
+  });
+  if (suppliers) suppliers.forEach(s => {
+    fSupplier.innerHTML += `<option value="${s.id}">${x(s.name)}</option>`;
+  });
+
+  renderTable();
+}
+
+function renderTable() {
+  const q    = document.getElementById('searchInp').value.toLowerCase();
+  const cat  = document.getElementById('catFilter').value;
+  const stk  = document.getElementById('stockFilter').value;
+
+  let list = products.filter(p => {
+    const ms = p.name.toLowerCase().includes(q) || (p.sku||'').toLowerCase().includes(q)
+             || (p.brand||'').toLowerCase().includes(q);
+    const mc = !cat || String(p.category_id) === cat;
+    const mv = !stk || (
+      (stk === 'ok'  && p.current_qty > p.min_stock) ||
+      (stk === 'low' && p.current_qty > 0 && p.current_qty <= p.min_stock) ||
+      (stk === 'out' && p.current_qty === 0)
+    );
+    return ms && mc && mv;
+  });
+
+  const tbody = document.getElementById('tbody');
+  const empty = document.getElementById('emptyMsg');
+  empty.classList.toggle('hidden', list.length > 0);
+
+  tbody.innerHTML = list.map(p => {
+    const margin = p.purchase_price > 0
+      ? ((p.selling_price - p.purchase_price) / p.purchase_price * 100).toFixed(1) + '%'
+      : '—';
+    const qc = p.current_qty === 0 ? 'qty-out' : p.current_qty <= p.min_stock ? 'qty-low' : 'qty-ok';
+    return `<tr>
+      <td>
+        <div class="pname">${x(p.name)}</div>
+        <div class="psku">${x(p.sku)}</div>
+      </td>
+      <td>${x(p.category_name||'—')}</td>
+      <td class="mono" style="font-size:11px;color:var(--muted)">${x(p.sku)}</td>
+      <td class="mono">${rupee(p.purchase_price)}</td>
+      <td class="mono">${rupee(p.selling_price)}</td>
+      <td class="mono" style="color:var(--green)">${margin}</td>
+      <td class="mono ${qc}" style="font-weight:800;font-size:16px">${p.current_qty} <span style="font-size:10px;color:var(--muted)">${x(p.unit_type)}</span></td>
+      <td>${statusBadge(p.current_qty, p.min_stock)}</td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="ibtn" onclick="openEdit(${p.id})" title="Edit">✏️</button>
+<button class="ibtn" onclick="openAliases(${p.id},'${x(p.name)}')" title="Aliases">🏷️</button>
+<button class="ibtn del" onclick="deleteProduct(${p.id})" title="Delete">🗑️</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// Profit margin live preview
+['fPurchasePrice','fSellingPrice'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    const buy  = parseFloat(document.getElementById('fPurchasePrice').value) || 0;
+    const sell = parseFloat(document.getElementById('fSellingPrice').value) || 0;
+    const m    = buy > 0 ? ((sell - buy) / buy * 100).toFixed(1) + '%' : '—';
+    document.getElementById('marginPreview').textContent = m;
+  });
+});
+
+function openAdd() {
+  editId = null;
+  document.getElementById('modalTitle').textContent = '➕ Add Product · उत्पाद जोड़ें';
+  ['fName','fBrand','fSku','fBarcode','fNotes'].forEach(id => document.getElementById(id).value = '');
+  ['fPurchasePrice','fSellingPrice','fMrp','fQty','fMinStock'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('fCat').selectedIndex = 0;
+  document.getElementById('fUnit').selectedIndex = 0;
+  document.getElementById('fSupplier').selectedIndex = 0;
+  document.getElementById('fExpiry').value = '';
+  document.getElementById('marginPreview').textContent = '—';
+  open_('productModal');
+}
+
+function openEdit(id) {
+  const p = products.find(p => p.id === id);
+  if (!p) return;
+  editId = id;
+  document.getElementById('modalTitle').textContent = '✏️ Edit Product · उत्पाद संपादित करें';
+  document.getElementById('fName').value          = p.name;
+  document.getElementById('fBrand').value         = p.brand || '';
+  document.getElementById('fSku').value           = p.sku;
+  document.getElementById('fBarcode').value       = p.barcode || '';
+  document.getElementById('fPurchasePrice').value = p.purchase_price;
+  document.getElementById('fSellingPrice').value  = p.selling_price;
+  document.getElementById('fMrp').value           = p.mrp;
+  document.getElementById('fQty').value           = p.current_qty;
+  document.getElementById('fUnit').value          = p.unit_type;
+  document.getElementById('fMinStock').value      = p.min_stock;
+  document.getElementById('fExpiry').value        = p.expiry_date ? p.expiry_date.split('T')[0] : '';
+  document.getElementById('fNotes').value         = p.notes || '';
+  document.getElementById('fCat').value           = p.category_id || '';
+  document.getElementById('fSupplier').value      = p.supplier_id || '';
+  const m = p.purchase_price > 0
+    ? ((p.selling_price - p.purchase_price) / p.purchase_price * 100).toFixed(1) + '%' : '—';
+  document.getElementById('marginPreview').textContent = m;
+  open_('productModal');
+}
+
+async function saveProduct() {
+  const name = document.getElementById('fName').value.trim();
+  const qty  = parseInt(document.getElementById('fQty').value);
+  if (!name) return toast('Product name is required · नाम ज़रूरी है', 'err');
+  if (isNaN(qty) || qty < 0) return toast('Enter valid quantity · सही मात्रा दर्ज करें', 'err');
+
+  const payload = {
+    name,
+    brand:          document.getElementById('fBrand').value.trim(),
+    sku:            document.getElementById('fSku').value.trim(),
+    barcode:        document.getElementById('fBarcode').value.trim(),
+    category_id:    document.getElementById('fCat').value || null,
+    purchase_price: parseFloat(document.getElementById('fPurchasePrice').value) || 0,
+    selling_price:  parseFloat(document.getElementById('fSellingPrice').value) || 0,
+    mrp:            parseFloat(document.getElementById('fMrp').value) || 0,
+    current_qty:    qty,
+    unit_type:      document.getElementById('fUnit').value,
+    min_stock:      parseInt(document.getElementById('fMinStock').value) || 5,
+    expiry_date:    document.getElementById('fExpiry').value || null,
+    supplier_id:    document.getElementById('fSupplier').value || null,
+    notes:          document.getElementById('fNotes').value.trim()
+  };
+
+  const url    = editId ? `/products/${editId}` : '/products';
+  const method = editId ? 'PUT' : 'POST';
+  const res    = await apiFetch(url, { method, body: JSON.stringify(payload) });
+  if (!res) return;
+  if (res.error) return toast(res.error, 'err');
+
+  toast(editId ? 'Product updated ✓' : 'Product added ✓', 'ok');
+  close_('productModal');
+  await loadAll();
+}
+
+async function deleteProduct(id) {
+  const p = products.find(p => p.id === id);
+  if (!confirm(`Delete "${p?.name}"? यह उत्पाद हटाएं?`)) return;
+  const res = await apiFetch(`/products/${id}`, { method: 'DELETE' });
+  if (res) { toast('Product deleted · उत्पाद हटाया गया', 'info'); loadAll(); }
+}
+
+loadAll();
+// ── ALIAS SYSTEM ─────────────────────────────────────────────────────────────
+let currentAliasProductId = null;
+
+async function openAliases(id, name) {
+  currentAliasProductId = id;
+  document.getElementById('aliasModalTitle').textContent = `🏷️ Aliases — ${name}`;
+  await loadAliases();
+  open_('aliasModal');
+}
+
+async function loadAliases() {
+  const product = await apiFetch(`/products/${currentAliasProductId}`);
+  if (!product) return;
+
+  const aliases = product.aliases || [];
+  const box     = document.getElementById('existingAliases');
+
+  if (!aliases.length) {
+    box.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:8px 0">No aliases yet. Add some below!</div>';
+    return;
+  }
+
+  box.innerHTML = `
+    <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">
+      Current Aliases · वर्तमान उपनाम
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">
+      ${aliases.map((a, i) => `
+        <span style="display:inline-flex;align-items:center;gap:6px;background:var(--surface2);border:1.5px solid var(--border);padding:5px 10px;border-radius:20px;font-size:12px;font-weight:600">
+          ${x(a)}
+          <button onclick="deleteAlias(${product.alias_ids ? product.alias_ids[i] : i})" style="background:none;border:none;cursor:pointer;color:var(--red);font-size:14px;padding:0;line-height:1">×</button>
+        </span>
+      `).join('')}
+    </div>`;
+}
+
+async function addAlias() {
+  const alias = document.getElementById('aliasInput').value.trim();
+  if (!alias) return toast('Enter an alias · उपनाम दर्ज करें', 'err');
+
+  const res = await apiFetch(`/products/${currentAliasProductId}/aliases`, {
+    method: 'POST',
+    body: JSON.stringify({ alias })
+  });
+
+  if (res) {
+    document.getElementById('aliasInput').value = '';
+    toast(`Alias "${alias}" added ✓`, 'ok');
+    await loadAliases();
+    await loadAll(); // refresh products list
+  }
+}
+
+async function deleteAlias(aliasId) {
+  if (!confirm('Remove this alias?')) return;
+  const res = await apiFetch(`/aliases/${aliasId}`, { method: 'DELETE' });
+  if (res) {
+    toast('Alias removed', 'info');
+    await loadAliases();
+  }
+}
+</script>
+</body>
+</html>

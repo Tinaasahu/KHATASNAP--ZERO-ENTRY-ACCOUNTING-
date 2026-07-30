@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KhataSnap – Integration Test</title>
+<link rel="stylesheet" href="/static/css/base.css">
+<style>
+.test-card { background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px }
+.test-header { padding:14px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1.5px solid var(--border) }
+.test-title { font-size:14px;font-weight:800 }
+.test-body { padding:20px;display:grid;gap:12px }
+.test-row { display:grid;grid-template-columns:1fr 1fr;gap:12px }
+textarea.code {
+  font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.7;
+  padding:12px;background:#1c1917;color:#e7e5e4;border:none;border-radius:10px;
+  resize:vertical;min-height:140px;width:100%;outline:none;
+}
+.response-box {
+  font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6;
+  padding:12px;border-radius:10px;min-height:60px;white-space:pre-wrap;
+  word-break:break-all;display:none;
+}
+.res-ok  { background:#dcfce7;color:#166534;border:1.5px solid #86efac }
+.res-err { background:#fee2e2;color:#991b1b;border:1.5px solid #fca5a5 }
+.endpoint-tag {
+  font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;
+  padding:4px 10px;border-radius:6px;background:var(--surface2);color:var(--muted)
+}
+</style>
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-logo"><div class="brand">🧾 KhataSnap</div><div class="sub">Inventory · Finals</div></div>
+  <div class="nav-section">
+    <div class="nav-label">Main</div>
+    <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+    <a href="/products" class="nav-item"><span class="nav-icon">📦</span><span>Products</span></a>
+    <a href="/stock" class="nav-item"><span class="nav-icon">🔄</span><span>Stock</span></a>
+    <a href="/low-stock" class="nav-item"><span class="nav-icon">⚠️</span><span>Low Stock</span></a>
+    <a href="/history" class="nav-item"><span class="nav-icon">📋</span><span>History</span></a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Dev</div>
+    <a href="/test" class="nav-item active"><span class="nav-icon">🧪</span><span>API Test</span></a>
+    <a href="/categories" class="nav-item"><span class="nav-icon">🏷️</span><span>Categories</span></a>
+    <a href="/suppliers" class="nav-item"><span class="nav-icon">🚚</span><span>Suppliers</span></a>
+    <a href="/sre" class="nav-item"><span class="nav-icon">🔁</span><span>SRE Console</span></a>
+    <a href="/sre/smart" class="nav-item nav-item-smart"><span class="nav-icon">🧠</span><span>Smart SRE</span></a>
+  </div>
+  <div class="sidebar-bottom"><div class="server-status"><span class="sdot" id="sdot"></span><span id="slabel">Connecting…</span></div></div>
+</nav>
+
+<div class="main">
+  <div class="page-header">
+    <div class="page-title">🧪 Integration Test · API टेस्ट</div>
+    <div class="page-sub">Test all teammate APIs — OCR1, OCR2, ASR, Calculator, SRE</div>
+  </div>
+
+  <!-- OCR 1 -->
+  <div class="test-card">
+    <div class="test-header">
+      <div>
+        <div class="test-title">📄 OCR 1 — Sales Bill → Deduct Stock</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">बिक्री बिल से स्टॉक घटाएं</div>
+      </div>
+      <span class="endpoint-tag">POST /api/ocr1</span>
+    </div>
+    <div class="test-body">
+      <div class="test-row">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Request Body</div>
+          <textarea class="code" id="ocr1Body">{
+  "transaction_id": "OCR1-TEST-001",
+  "items": [
+    { "name": "Parle-G", "qty": 5 },
+    { "name": "Maggi Noodles", "qty": 3 }
+  ]
+}</textarea>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Response</div>
+          <div class="response-box" id="ocr1Res"></div>
+        </div>
+      </div>
+      <button class="btn btn-primary" style="width:fit-content" onclick="testAPI('ocr1')">▶ Run OCR1 Test</button>
+    </div>
+  </div>
+
+  <!-- OCR 2 -->
+  <div class="test-card">
+    <div class="test-header">
+      <div>
+        <div class="test-title">📦 OCR 2 — Distributor Bill → Add Stock</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">वितरक बिल से स्टॉक जोड़ें</div>
+      </div>
+      <span class="endpoint-tag">POST /api/ocr2</span>
+    </div>
+    <div class="test-body">
+      <div class="test-row">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Request Body</div>
+          <textarea class="code" id="ocr2Body">{
+  "transaction_id": "OCR2-TEST-001",
+  "items": [
+    { "name": "Parle-G", "qty": 100 },
+    { "name": "Maggi Noodles", "qty": 50 }
+  ]
+}</textarea>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Response</div>
+          <div class="response-box" id="ocr2Res"></div>
+        </div>
+      </div>
+      <button class="btn btn-green" style="width:fit-content" onclick="testAPI('ocr2')">▶ Run OCR2 Test</button>
+    </div>
+  </div>
+
+  <!-- ASR -->
+  <div class="test-card">
+    <div class="test-header">
+      <div>
+        <div class="test-title">🎙️ ASR — Voice Sale → Deduct Stock</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">वॉयस बिक्री से स्टॉक घटाएं</div>
+      </div>
+      <span class="endpoint-tag">POST /api/asr</span>
+    </div>
+    <div class="test-body">
+      <div class="test-row">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Request Body</div>
+          <textarea class="code" id="asrBody">{
+  "transaction_id": "ASR-TEST-001",
+  "items": [
+    { "name": "Parle-G", "qty": 2 },
+    { "name": "Maggi", "qty": 1 }
+  ]
+}</textarea>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Response</div>
+          <div class="response-box" id="asrRes"></div>
+        </div>
+      </div>
+      <button class="btn btn-blue" style="width:fit-content" onclick="testAPI('asr')">▶ Run ASR Test</button>
+    </div>
+  </div>
+
+  <!-- CALCULATOR -->
+  <div class="test-card">
+    <div class="test-header">
+      <div>
+        <div class="test-title">🧮 Calculator — Predictions → Deduct Stock</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">≥75% auto deduct · 50-74% flagged · &lt;50% skipped</div>
+      </div>
+      <span class="endpoint-tag">POST /api/calculator</span>
+    </div>
+    <div class="test-body">
+      <div class="test-row">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Request Body</div>
+          <textarea class="code" id="calcBody">{
+  "transaction_id": "CALC-TEST-001",
+  "bill_total": 150,
+  "items": [
+    { "name": "Parle-G", "qty": 3, "price": 10, "confidence": 0.95 },
+    { "name": "Maggi", "qty": 2, "price": 14, "confidence": 0.62 },
+    { "name": "Unknown Item", "qty": 1, "price": 5, "confidence": 0.30 }
+  ]
+}</textarea>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Response</div>
+          <div class="response-box" id="calcRes"></div>
+        </div>
+      </div>
+      <button class="btn" style="background:var(--yellow);color:white;width:fit-content" onclick="testAPI('calculator')">▶ Run Calculator Test</button>
+    </div>
+  </div>
+
+  <!-- SRE RECONCILE -->
+  <div class="test-card">
+    <div class="test-header">
+      <div>
+        <div class="test-title">🔁 SRE — Night Reconciliation</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">रात का स्टॉक सुधार</div>
+      </div>
+      <span class="endpoint-tag">POST /api/sre/reconcile</span>
+    </div>
+    <div class="test-body">
+      <div class="test-row">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Request Body</div>
+          <textarea class="code" id="sreBody">{
+  "corrections": [
+    { "product_id": 1, "correct_qty": 45, "reason": "physical count" }
+  ]
+}</textarea>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Response</div>
+          <div class="response-box" id="sreRes"></div>
+        </div>
+      </div>
+      <button class="btn btn-danger" style="width:fit-content" onclick="testAPI('sre/reconcile')">▶ Run SRE Test</button>
+    </div>
+  </div>
+
+  <!-- DUPLICATE TEST -->
+  <div class="test-card">
+    <div class="test-header">
+      <div>
+        <div class="test-title">🛡️ Duplicate Protection Test</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">Same transaction_id should be rejected</div>
+      </div>
+      <span class="endpoint-tag">POST /api/ocr1</span>
+    </div>
+    <div class="test-body">
+      <div style="font-size:13px;color:var(--muted)">
+        Run the OCR1 test above twice with the same <code style="background:var(--surface2);padding:2px 6px;border-radius:4px">transaction_id</code> — the second call should return <b style="color:var(--red)">409 Duplicate transaction</b>.
+      </div>
+      <button class="btn btn-ghost" style="width:fit-content" onclick="testDuplicate()">▶ Test Duplicate Rejection</button>
+      <div class="response-box" id="dupRes"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/js/app.js"></script

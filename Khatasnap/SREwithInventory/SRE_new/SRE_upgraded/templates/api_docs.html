@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KhataSnap – API Docs</title>
+<link rel="stylesheet" href="/static/css/base.css">
+<style>
+.endpoint {
+  background:var(--surface);border:1.5px solid var(--border);
+  border-radius:var(--radius);margin-bottom:16px;overflow:hidden
+}
+.endpoint-header {
+  padding:14px 20px;display:flex;align-items:center;gap:12px;
+  border-bottom:1.5px solid var(--border);background:var(--surface2)
+}
+.method {
+  font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:800;
+  padding:4px 10px;border-radius:6px;color:white
+}
+.m-post { background:#16a34a }
+.m-get  { background:#1d4ed8 }
+.m-put  { background:#b45309 }
+.m-del  { background:#b91c1c }
+.endpoint-path {
+  font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700
+}
+.endpoint-desc { font-size:12px;color:var(--muted);margin-left:auto }
+.endpoint-body { padding:20px;display:grid;gap:16px }
+.code-block {
+  background:#1c1917;color:#e7e5e4;padding:14px 16px;border-radius:10px;
+  font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.7;
+  overflow-x:auto;white-space:pre
+}
+.field-table { width:100%;border-collapse:collapse }
+.field-table th {
+  text-align:left;padding:7px 12px;font-size:10px;font-weight:700;
+  text-transform:uppercase;letter-spacing:1px;color:var(--muted);
+  background:var(--surface2);border-bottom:1.5px solid var(--border)
+}
+.field-table td {
+  padding:8px 12px;font-size:12px;border-bottom:1px solid var(--border)
+}
+.field-name { font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--accent) }
+.req { color:var(--red);font-size:10px;font-weight:700 }
+.opt { color:var(--muted);font-size:10px }
+</style>
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-logo"><div class="brand">🧾 KhataSnap</div><div class="sub">Inventory · Finals</div></div>
+  <div class="nav-section">
+    <div class="nav-label">Main</div>
+    <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+    <a href="/products" class="nav-item"><span class="nav-icon">📦</span><span>Products</span></a>
+    <a href="/stock" class="nav-item"><span class="nav-icon">🔄</span><span>Stock</span></a>
+    <a href="/low-stock" class="nav-item"><span class="nav-icon">⚠️</span><span>Low Stock</span></a>
+    <a href="/history" class="nav-item"><span class="nav-icon">📋</span><span>History</span></a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Setup</div>
+    <a href="/categories" class="nav-item"><span class="nav-icon">🏷️</span><span>Categories</span></a>
+    <a href="/suppliers" class="nav-item"><span class="nav-icon">🚚</span><span>Suppliers</span></a>
+    <a href="/test" class="nav-item"><span class="nav-icon">🧪</span><span>API Test</span></a>
+    <a href="/sre" class="nav-item"><span class="nav-icon">🔁</span><span>SRE Console</span></a>
+    <a href="/sre/smart" class="nav-item nav-item-smart"><span class="nav-icon">🧠</span><span>Smart SRE</span></a>
+    <a href="/api-docs" class="nav-item active"><span class="nav-icon">📖</span><span>API Docs</span></a>
+  </div>
+  <div class="sidebar-bottom"><div class="server-status"><span class="sdot" id="sdot"></span><span id="slabel">Connecting…</span></div></div>
+</nav>
+
+<div class="main">
+  <div class="page-header">
+    <div class="page-title">📖 API Documentation</div>
+    <div class="page-sub">Integration guide for OCR, ASR, Calculator and SRE teammates</div>
+  </div>
+
+  <!-- BASE URL -->
+  <div class="card" style="margin-bottom:24px">
+    <div class="card-body">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Base URL</div>
+          <div class="code-block" style="padding:10px 16px;display:inline-block">http://YOUR_IP:8000/api</div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Content-Type</div>
+          <div class="code-block" style="padding:10px 16px;display:inline-block">application/json</div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Your IP</div>
+          <div id="myIP" class="code-block" style="padding:10px 16px;display:inline-block">loading…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OCR 1 -->
+  <div class="endpoint">
+    <div class="endpoint-header">
+      <span class="method m-post">POST</span>
+      <span class="endpoint-path">/api/ocr1</span>
+      <span class="endpoint-desc">📄 Sales Bill → Deduct Stock</span>
+    </div>
+    <div class="endpoint-body">
+      <table class="field-table">
+        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+        <tr><td class="field-name">transaction_id</td><td>string</td><td><span class="opt">optional</span></td><td>Unique ID — auto-generated if not provided</td></tr>
+        <tr><td class="field-name">items</td><td>array</td><td><span class="req">required</span></td><td>List of items from bill</td></tr>
+        <tr><td class="field-name">items[].name</td><td>string</td><td><span class="req">required</span></td><td>Product name (fuzzy matched)</td></tr>
+        <tr><td class="field-name">items[].qty</td><td>int</td><td><span class="req">required</span></td><td>Quantity to deduct</td></tr>
+      </table>
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Example Request</div>
+        <div class="code-block">{
+  "transaction_id": "OCR1-20240310-001",
+  "items": [
+    { "name": "Parle-G Biscuit", "qty": 5 },
+    { "name": "Maggi Noodles",   "qty": 3 }
+  ]
+}</div>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Example Response</div>
+        <div class="code-block">{
+  "success": true,
+  "txn_id": "OCR1-20240310-001",
+  "log": [
+    { "status": "deducted", "name": "Parle-G Biscuit", "qty": 5, "confidence": 1.0 },
+    { "status": "deducted", "name": "Maggi Noodles",   "qty": 3, "confidence": 0.85 }
+  ]
+}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OCR 2 -->
+  <div class="endpoint">
+    <div class="endpoint-header">
+      <span class="method m-post">POST</span>
+      <span class="endpoint-path">/api/ocr2</span>
+      <span class="endpoint-desc">📦 Distributor Bill → Add Stock</span>
+    </div>
+    <div class="endpoint-body">
+      <table class="field-table">
+        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+        <tr><td class="field-name">transaction_id</td><td>string</td><td><span class="opt">optional</span></td><td>Unique ID — auto-generated if not provided</td></tr>
+        <tr><td class="field-name">items</td><td>array</td><td><span class="req">required</span></td><td>List of items from distributor bill</td></tr>
+        <tr><td class="field-name">items[].name</td><td>string</td><td><span class="req">required</span></td><td>Product name — new product auto-created if not found</td></tr>
+        <tr><td class="field-name">items[].qty</td><td>int</td><td><span class="req">required</span></td><td>Quantity to add</td></tr>
+      </table>
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Example Request</div>
+        <div class="code-block">{
+  "transaction_id": "OCR2-20240310-001",
+  "items": [
+    { "name": "Parle-G Biscuit", "qty": 100 },
+    { "name": "Maggi Noodles",   "qty": 50  },
+    { "name": "New Product XYZ", "qty": 25  }
+  ]
+}</div>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Response status values</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <span class="badge b-ok">added — stock increased</span>
+          <span class="badge b-blue">created — new product made</span>
+          <span class="badge b-out">error — something failed</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ASR -->
+  <div class="endpoint">
+    <div class="endpoint-header">
+      <span class="method m-post">POST</span>
+      <span class="endpoint-path">/api/asr</span>
+      <span class="endpoint-desc">🎙️ Voice Sale → Deduct Stock</span>
+    </div>
+    <div class="endpoint-body">
+      <table class="field-table">
+        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+        <tr><td class="field-name">transaction_id</td><td>string</td><td><span class="opt">optional</span></td><td>Unique ID</td></tr>
+        <tr><td class="field-name">items</td><td>array</td><td><span class="opt">optional</span></td><td>Batch mode — list of items</td></tr>
+        <tr><td class="field-name">name</td><td>string</td><td><span class="opt">single mode</span></td><td>Product name</td></tr>
+        <tr><td class="field-name">qty</td><td>int</td><td><span class="opt">single mode</span></td><td>Quantity sold</td></tr>
+      </table>
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Single Item Mode</div>
+        <div class="code-block">{
+  "transaction_id": "ASR-20240310-001",
+  "name": "Parle-G",
+  "qty": 5
+}</div>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Batch Mode</div>
+        <div class="code-block">{
+  "transaction_id": "ASR-20240310-002",
+  "items": [
+    { "name": "Parle-G",       "qty": 3 },
+    { "name": "Maggi Noodles", "qty": 2 }
+  ]
+}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CALCULATOR -->
+  <div class="endpoint">
+    <div class="endpoint-header">
+      <span class="method m-post">POST</span>
+      <span class="endpoint-path">/api/calculator</span>
+      <span class="endpoint-desc">🧮 Calculator Predictions → Smart Deduct</span>
+    </div>
+    <div class="endpoint-body">
+      <table class="field-table">
+        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+        <tr><td class="field-name">transaction_id</td><td>string</td><td><span class="opt">optional</span></td><td>Unique ID</td></tr>
+        <tr><td class="field-name">bill_total</td><td>float</td><td><span class="opt">optional</span></td><td>Total bill amount</td></tr>
+        <tr><td class="field-name">items[].name</td><td>string</td><td><span class="req">required</span></td><td>Predicted product name</td></tr>
+        <tr><td class="field-name">items[].qty</td><td>int</td><td><span class="req">required</span></td><td>Predicted quantity</td></tr>
+        <tr><td class="field-name">items[].price</td><td>float</td><td><span class="opt">optional</span></td><td>Predicted price</td></tr>
+        <tr><td class="field-name">items[].confidence</td><td>float</td><td><span class="req">required</span></td><td>0.0 to 1.0 confidence score</td></tr>
+      </table>
+      <div style="background:#fef3c7;border:1.5px solid #fde68a;border-radius:10px;padding:12px 16px;font-size:12px;color:var(--yellow)">
+        <b>Confidence Rules:</b><br>
+        ≥ 0.75 → Auto deduct immediately<br>
+        0.50 – 0.74 → Deduct + flagged as uncertain (SRE review)<br>
+        &lt; 0.50 → Skipped entirely
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Example Request</div>
+        <div class="code-block">{
+  "transaction_id": "CALC-20240310-001",
+  "bill_total": 150.00,
+  "items": [
+    { "name": "Parle-G", "qty": 3, "price": 10.0, "confidence": 0.95 },
+    { "name": "Maggi",   "qty": 2, "price": 14.0, "confidence": 0.62 },
+    { "name": "???",     "qty": 1, "price":  5.0, "confidence": 0.30 }
+  ]
+}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SRE -->
+  <div class="endpoint">
+    <div class="endpoint-header">
+      <span class="method m-post">POST</span>
+      <span class="endpoint-path">/api/sre/reconcile</span>
+      <span class="endpoint-desc">🔁 Night Reconciliation → Correct Stock</span>
+    </div>
+    <div class="endpoint-body">
+      <table class="field-table">
+        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+        <tr><td class="field-name">corrections[].product_id</td><td>int</td><td><span class="req">required</span></td><td>Product ID from inventory</td></tr>
+        <tr><td class="field-name">corrections[].correct_qty</td><td>int</td><td><span class="req">required</span></td><td>The correct physical stock count</td></tr>
+        <tr><td class="field-name">corrections[].reason</td><td>string</td><td><span class="opt">optional</span></td><td>Reason for correction</td></tr>
+      </table>
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px">Example Request</div>
+        <div class="code-block">{
+  "corrections": [
+    { "product_id": 1, "correct_qty": 45, "reason": "physical count" },
+    { "product_id": 2, "correct_qty": 12, "reason": "damaged goods removed" }
+  ]
+}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET INVENTORY -->
+  <div class="endpoint">
+    <div class="endpoint-header">
+      <span class="method m-get">GET</span>
+      <span class="endpoint-path">/api/inventory</span>
+      <span class="endpoint-desc">📊 Get full inventory list</span>
+    </div>
+    <div class="endpoint-body">
+      <div class="code-block">{
+  "id": 1,
+  "name": "Parle-G Biscuit",
+  "sku": "PA-PARL-03101232",
+  "current_qty": 50,
+  "min_stock": 5,
+  "selling_price": 10.0,
+  "unit_type": "pcs",
+  "category": "Biscuits",
+  "stock_status": "ok"
+}</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/js/app.js"></script>
+<script>
+// Show local IP
+fetch('https://api.ipify.org?format=json')
+  .then(r => r.json())
+  .then(d => { document.getElementById('myIP').textContent = d.ip + ':8000'; })
+  .catch(() => { document.getElementById('myIP').textContent = '127.0.0.1:8000'; });
+</script>
+</body>
+</html>

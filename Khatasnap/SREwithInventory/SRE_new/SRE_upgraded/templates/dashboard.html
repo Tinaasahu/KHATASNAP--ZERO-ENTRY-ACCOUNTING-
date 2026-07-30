@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KhataSnap – Dashboard</title>
+<link rel="stylesheet" href="/static/css/base.css">
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="brand">🧾 KhataSnap</div>
+    <div class="sub">Inventory · Finals</div>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Main</div>
+    <a href="/" class="nav-item active"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+    <a href="/products" class="nav-item"><span class="nav-icon">📦</span><span>Products</span></a>
+    <a href="/stock" class="nav-item"><span class="nav-icon">🔄</span><span>Stock</span></a>
+    <a href="/low-stock" class="nav-item"><span class="nav-icon">⚠️</span><span>Low Stock</span></a>
+    <a href="/history" class="nav-item"><span class="nav-icon">📋</span><span>History</span></a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Setup</div>
+    <a href="/categories" class="nav-item"><span class="nav-icon">🏷️</span><span>Categories</span></a>
+    <a href="/suppliers" class="nav-item"><span class="nav-icon">🚚</span><span>Suppliers</span></a>
+    <a href="/test" class="nav-item"><span class="nav-icon">🧪</span><span>API Test</span></a>
+    <a href="/sre" class="nav-item"><span class="nav-icon">🔁</span><span>SRE Console</span></a>
+    <a href="/sre/smart" class="nav-item nav-item-smart"><span class="nav-icon">🧠</span><span>Smart SRE</span></a>
+    <a href="/api-docs" class="nav-item"><span class="nav-icon">📖</span><span>API Docs</span></a>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="server-status">
+      <span class="sdot" id="sdot"></span>
+      <span id="slabel">Connecting…</span>
+    </div>
+  </div>
+</nav>
+
+<div class="main">
+  <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">
+    <div>
+      <div class="page-title">Dashboard · डैशबोर्ड</div>
+      <div class="page-sub">KhataSnap Inventory Overview</div>
+      <div class="hindi">इन्वेंटरी का सारांश</div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <div id="lastUpdated" style="font-size:11px;color:var(--muted)"></div>
+      <button class="btn btn-ghost btn-sm" onclick="loadDashboard()">🔄 Refresh</button>
+    </div>
+  </div>
+
+  <!-- TOP STATS -->
+  <div class="stats-grid">
+    <div class="stat-card s-total">
+      <div class="stat-label">Total Products · कुल उत्पाद</div>
+      <div class="stat-val" id="sTotal">—</div>
+      <div class="stat-sub" id="sActive"></div>
+    </div>
+    <div class="stat-card s-ok">
+      <div class="stat-label">In Stock · स्टॉक में</div>
+      <div class="stat-val" id="sOk">—</div>
+      <div class="stat-sub">products well stocked</div>
+    </div>
+    <div class="stat-card s-low">
+      <div class="stat-label">Low Stock · कम स्टॉक</div>
+      <div class="stat-val" id="sLow">—</div>
+      <div class="stat-sub">need restocking soon</div>
+    </div>
+    <div class="stat-card s-out">
+      <div class="stat-label">Out of Stock · खत्म</div>
+      <div class="stat-val" id="sOut">—</div>
+      <div class="stat-sub">need immediate restock</div>
+    </div>
+  </div>
+
+  <!-- VALUE CARDS -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:24px">
+    <div class="stat-card s-val">
+      <div class="stat-label">Purchase Value · खरीद मूल्य</div>
+      <div class="stat-val" id="sPurchaseVal" style="font-size:22px">—</div>
+      <div class="stat-sub">total inventory cost</div>
+    </div>
+    <div class="stat-card s-ok">
+      <div class="stat-label">Selling Value · बिक्री मूल्य</div>
+      <div class="stat-val" id="sSellingVal" style="font-size:22px">—</div>
+      <div class="stat-sub">potential revenue</div>
+    </div>
+    <div class="stat-card" style="background:var(--surface)">
+      <div class="stat-label">Potential Profit · संभावित लाभ</div>
+      <div class="stat-val" id="sProfit" style="font-size:22px;color:var(--accent)">—</div>
+      <div class="stat-sub" id="sProfitPct"></div>
+    </div>
+  </div>
+
+  <!-- SOURCE BREAKDOWN + LOW STOCK -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px">
+
+    <!-- SOURCE BREAKDOWN -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">📡 Activity by Source · स्रोत अनुसार</span></div>
+      <div class="card-body">
+        <div id="sourceBreakdown" style="display:grid;gap:10px"></div>
+      </div>
+    </div>
+
+    <!-- LOW STOCK -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">⚠️ Low Stock Alert · कम स्टॉक</span>
+        <a href="/low-stock" class="btn btn-ghost btn-sm">View All</a>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Product</th><th>Qty</th><th>Min</th><th>Status</th>
+          </tr></thead>
+          <tbody id="lowTable"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- RECENT ACTIVITY -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">🕐 Recent Activity · हालिया गतिविधि</span>
+      <a href="/history" class="btn btn-ghost btn-sm">View All</a>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Product</th><th>Change</th><th>Action</th><th>Source</th><th>Old Qty</th><th>New Qty</th><th>Time</th>
+        </tr></thead>
+        <tbody id="actTable"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/js/app.js"></script>
+<script>
+async function loadDashboard() {
+  const [data, logs] = await Promise.all([
+    apiFetch('/dashboard'),
+    apiFetch('/inventory/logs?limit=50')
+  ]);
+  if (!data) return;
+
+  // Update timestamp
+  document.getElementById('lastUpdated').textContent =
+    'Updated: ' + new Date().toLocaleTimeString('en-IN');
+
+  // Stats
+  document.getElementById('sTotal').textContent  = data.total_products || 0;
+  document.getElementById('sOk').textContent     = data.in_stock || 0;
+  document.getElementById('sLow').textContent    = data.low_stock || 0;
+  document.getElementById('sOut').textContent    = data.out_of_stock || 0;
+
+  // Values
+  const purchase = parseFloat(data.total_purchase_value || 0);
+  const selling  = parseFloat(data.total_selling_value  || 0);
+  const profit   = selling - purchase;
+  const profitPct = purchase > 0 ? ((profit / purchase) * 100).toFixed(1) : 0;
+
+  document.getElementById('sPurchaseVal').textContent = rupee(purchase);
+  document.getElementById('sSellingVal').textContent  = rupee(selling);
+  document.getElementById('sProfit').textContent      = rupee(profit);
+  document.getElementById('sProfitPct').textContent   = `${profitPct}% margin on cost`;
+
+  // Low stock table
+  const lt = document.getElementById('lowTable');
+  if (data.low_stock_items && data.low_stock_items.length) {
+    lt.innerHTML = data.low_stock_items.map(i => `
+      <tr>
+        <td><b>${x(i.name)}</b><div style="font-size:10px;color:var(--muted)">${x(i.category||'')}</div></td>
+        <td class="mono ${qtyClass(i.current_qty, i.min_stock)}" style="font-weight:800">${i.current_qty}</td>
+        <td class="mono" style="color:var(--muted)">${i.min_stock}</td>
+        <td>${statusBadge(i.current_qty, i.min_stock)}</td>
+      </tr>`).join('');
+  } else {
+    lt.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--muted)">✅ All items well stocked!</td></tr>';
+  }
+
+  // Recent activity
+  const at = document.getElementById('actTable');
+  if (data.recent_activity && data.recent_activity.length) {
+    at.innerHTML = data.recent_activity.map(a => {
+      const sign  = a.qty_change > 0 ? '+' : '';
+      const color = a.qty_change > 0 ? 'var(--green)' : 'var(--red)';
+      const time  = new Date(a.created_at).toLocaleString('en-IN');
+      return `<tr>
+        <td><b>${x(a.product_name)}</b></td>
+        <td class="mono" style="color:${color};font-weight:700">${sign}${a.qty_change}</td>
+        <td><span class="badge b-gray">${x(a.action_type)}</span></td>
+        <td><span class="badge b-blue">${x(a.source)}</span></td>
+        <td class="mono" style="color:var(--muted)">${a.old_qty ?? '—'}</td>
+        <td class="mono" style="font-weight:700">${a.new_qty ?? '—'}</td>
+        <td style="font-size:11px;color:var(--muted)">${time}</td>
+      </tr>`;
+    }).join('');
+  } else {
+    at.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--muted)">No activity yet</td></tr>';
+  }
+
+  // Source breakdown from logs
+  if (logs) {
+    const sources = {};
+    logs.forEach(l => {
+      sources[l.source] = (sources[l.source] || 0) + 1;
+    });
+    const total = logs.length;
+    const colors = {
+      manual: 'var(--blue)', ocr1: 'var(--accent)', ocr2: 'var(--green)',
+      voice: '#8b5cf6', 'calculator-high': 'var(--yellow)',
+      'calculator-uncertain': '#f97316', sre: '#06b6d4'
+    };
+    document.getElementById('sourceBreakdown').innerHTML =
+      Object.entries(sources).sort((a,b) => b[1]-a[1]).map(([src, count]) => {
+        const pct   = total > 0 ? (count / total * 100).toFixed(0) : 0;
+        const color = colors[src] || 'var(--muted)';
+        return `
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+              <span style="font-weight:700">${x(src)}</span>
+              <span style="color:var(--muted)">${count} transactions (${pct}%)</span>
+            </div>
+            <div style="background:var(--surface2);border-radius:20px;height:8px;overflow:hidden">
+              <div style="background:${color};height:100%;width:${pct}%;border-radius:20px;transition:width .4s"></div>
+            </div>
+          </div>`;
+      }).join('') || '<div style="color:var(--muted);font-size:13px">No activity yet</div>';
+  }
+}
+
+loadDashboard();
+setInterval(loadDashboard, 15000);
+</script>
+</body>
+</html>

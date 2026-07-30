@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KhataSnap – Categories</title>
+<link rel="stylesheet" href="/static/css/base.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-logo"><div class="brand">🧾 KhataSnap</div><div class="sub">Inventory · Finals</div></div>
+  <div class="nav-section">
+    <div class="nav-label">Main</div>
+    <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+    <a href="/products" class="nav-item"><span class="nav-icon">📦</span><span>Products</span></a>
+    <a href="/stock" class="nav-item"><span class="nav-icon">🔄</span><span>Stock</span></a>
+    <a href="/low-stock" class="nav-item"><span class="nav-icon">⚠️</span><span>Low Stock</span></a>
+    <a href="/history" class="nav-item"><span class="nav-icon">📋</span><span>History</span></a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Setup</div>
+    <a href="/categories" class="nav-item"><span class="nav-icon">🏷️</span><span>Categories</span></a>
+    <a href="/suppliers" class="nav-item"><span class="nav-icon">🚚</span><span>Suppliers</span></a>
+    <a href="/test" class="nav-item"><span class="nav-icon">🧪</span><span>API Test</span></a>
+    <a href="/sre" class="nav-item"><span class="nav-icon">🔁</span><span>SRE Console</span></a>
+    <a href="/sre/smart" class="nav-item nav-item-smart"><span class="nav-icon">🧠</span><span>Smart SRE</span></a>
+    <a href="/api-docs" class="nav-item"><span class="nav-icon">📖</span><span>API Docs</span></a>
+  </div>
+  <div class="sidebar-bottom"><div class="server-status"><span class="sdot" id="sdot"></span><span id="slabel">Connecting…</span></div></div>
+</nav>
+
+<div class="main">
+  <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">
+    <div>
+      <div class="page-title">Categories · श्रेणियाँ</div>
+      <div class="page-sub">Manage product categories</div>
+    </div>
+    <button class="btn btn-primary" onclick="open_('catModal')">➕ Add Category</button>
+  </div>
+
+  <div class="card" style="max-width:500px">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Category Name</th><th>Created</th><th>Actions</th></tr></thead>
+        <tbody id="catTable"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="catModal">
+  <div class="modal" style="width:380px">
+    <div class="modal-header">
+      <span class="modal-title" id="catModalTitle">➕ Add Category</span>
+      <button class="modal-close" onclick="close_('catModal')">✕</button>
+    </div>
+    <div class="fg">
+      <label>Category Name · श्रेणी का नाम</label>
+      <input id="catName" placeholder="e.g. Biscuits">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-cancel" onclick="close_('catModal')">Cancel</button>
+      <button class="btn btn-primary btn-submit" onclick="saveCat()">💾 Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/js/app.js"></script>
+<script>
+let cats = []; let editCatId = null;
+
+async function load() {
+  cats = await apiFetch('/categories');
+  if (!cats) return;
+  document.getElementById('catTable').innerHTML = cats.map(c => `
+    <tr>
+      <td><b>${x(c.name)}</b></td>
+      <td style="font-size:11px;color:var(--muted)">${new Date(c.created_at).toLocaleDateString('en-IN')}</td>
+      <td><div style="display:flex;gap:6px">
+        <button class="ibtn" onclick="editCat(${c.id},'${x(c.name)}')">✏️</button>
+        <button class="ibtn del" onclick="deleteCat(${c.id})">🗑️</button>
+      </div></td>
+    </tr>`).join('');
+}
+
+function editCat(id, name) {
+  editCatId = id;
+  document.getElementById('catModalTitle').textContent = '✏️ Edit Category';
+  document.getElementById('catName').value = name;
+  open_('catModal');
+}
+
+async function saveCat() {
+  const name = document.getElementById('catName').value.trim();
+  if (!name) return toast('Name required', 'err');
+  const url    = editCatId ? `/categories/${editCatId}` : '/categories';
+  const method = editCatId ? 'PUT' : 'POST';
+  const res    = await apiFetch(url, { method, body: JSON.stringify({ name }) });
+  if (res) { toast(editCatId ? 'Updated ✓' : 'Added ✓', 'ok'); editCatId = null; close_('catModal'); load(); }
+}
+
+async function deleteCat(id) {
+  if (!confirm('Delete this category?')) return;
+  const res = await apiFetch(`/categories/${id}`, { method: 'DELETE' });
+  if (res) { toast('Deleted', 'info'); load(); }
+}
+
+load();
+</script>
+</body>
+</html>

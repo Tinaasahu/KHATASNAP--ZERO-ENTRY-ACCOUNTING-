@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KhataSnap — Bill Scanner</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink:    #111827;
+  --muted:  #6B7280;
+  --border: #E5E7EB;
+  --bg:     #F9FAFB;
+  --white:  #FFFFFF;
+  --saffron:#F97316;
+  --saffron-lt:#FFF7ED;
+  --green:  #16A34A;
+  --green-lt:#F0FDF4;
+  --red:    #DC2626;
+  --red-lt: #FEF2F2;
+  --amber:  #D97706;
+  --amber-lt:#FFFBEB;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;padding:32px 16px}
+.page{max-width:680px;margin:0 auto}
+
+/* ── Header ── */
+.header{display:flex;align-items:center;gap:12px;margin-bottom:32px}
+.logo-mark{width:40px;height:40px;background:var(--ink);border-radius:10px;display:flex;align-items:center;justify-content:center}
+.logo-mark svg{width:22px;height:22px;fill:none;stroke:white;stroke-width:2;stroke-linecap:round}
+.logo-text h1{font-family:'DM Serif Display',serif;font-size:22px;color:var(--ink);line-height:1}
+.logo-text p{font-size:12px;color:var(--muted);margin-top:2px}
+.badge{margin-left:auto;background:var(--saffron-lt);color:var(--saffron);font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px;border:1px solid #FED7AA}
+
+/* ── Upload card ── */
+.card{background:var(--white);border-radius:var(--radius);box-shadow:var(--shadow);border:1px solid var(--border);overflow:hidden}
+.card-body{padding:24px}
+
+.drop{border:2px dashed var(--border);border-radius:10px;padding:40px 24px;text-align:center;cursor:pointer;transition:all .2s;position:relative}
+.drop:hover,.drop.over{border-color:var(--saffron);background:var(--saffron-lt)}
+.drop-icon{width:44px;height:44px;background:var(--saffron-lt);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px}
+.drop-icon svg{width:20px;height:20px;stroke:var(--saffron);fill:none;stroke-width:2;stroke-linecap:round}
+.drop h3{font-size:14px;font-weight:600;margin-bottom:4px}
+.drop p{font-size:12px;color:var(--muted)}
+#fileInput{display:none}
+
+.preview-wrap{margin-top:14px;display:none}
+.preview-wrap img{width:100%;max-height:180px;object-fit:contain;border-radius:8px;border:1px solid var(--border)}
+
+.scan-btn{margin-top:16px;width:100%;padding:14px;border:none;border-radius:10px;background:var(--ink);color:white;font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;cursor:pointer;transition:opacity .15s;letter-spacing:-.2px}
+.scan-btn:hover:not(:disabled){opacity:.85}
+.scan-btn:disabled{opacity:.4;cursor:not-allowed}
+.scan-btn.loading{background:var(--muted)}
+
+/* ── Status ── */
+.status{margin-top:12px;font-size:12px;text-align:center;color:var(--muted);min-height:18px;display:flex;align-items:center;justify-content:center;gap:6px}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.status.ok{color:var(--green)} .status.err{color:var(--red)} .status.warn{color:var(--amber)}
+
+/* ── Results ── */
+#results{margin-top:24px;display:none}
+
+.conf-bar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-radius:10px;margin-bottom:20px;font-size:13px;font-weight:500}
+.conf-bar.high{background:var(--green-lt);color:var(--green);border:1px solid #BBF7D0}
+.conf-bar.medium{background:var(--amber-lt);color:var(--amber);border:1px solid #FDE68A}
+.conf-bar.low{background:var(--red-lt);color:var(--red);border:1px solid #FECACA}
+.conf-icon{font-size:16px}
+
+/* Meta grid */
+.section-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:10px}
+.meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}
+.meta-cell{background:var(--bg);border-radius:8px;padding:10px 14px;border:1px solid var(--border)}
+.meta-cell.full{grid-column:span 2}
+.meta-cell .lbl{font-size:10px;color:var(--muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:.5px}
+.meta-cell .val{font-size:13px;font-weight:500;word-break:break-all}
+.meta-cell .val.mono{font-family:'DM Mono',monospace;font-size:12px;letter-spacing:.3px}
+
+/* Items table */
+.table-wrap{overflow-x:auto;margin-bottom:20px;border-radius:10px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:12px;min-width:480px}
+thead{background:var(--bg)}
+thead th{padding:9px 12px;text-align:left;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);border-bottom:1px solid var(--border)}
+thead th:last-child{text-align:right}
+tbody td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--bg)}
+td:last-child{text-align:right;font-weight:500}
+.qty-pill{background:var(--saffron-lt);color:var(--saffron);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #FED7AA;white-space:nowrap}
+.item-name{font-weight:500;color:var(--ink)}
+.item-hsn{font-size:10px;color:var(--muted)}
+
+/* Tax summary */
+.tax-box{background:var(--bg);border-radius:10px;border:1px solid var(--border);overflow:hidden;margin-bottom:16px}
+.tax-row{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);font-size:13px}
+.tax-row:last-child{border-bottom:none}
+.tax-row .lbl{color:var(--muted)}
+.tax-row .val{font-weight:500}
+
+/* Total bar */
+.total-bar{background:var(--ink);color:white;border-radius:10px;padding:16px 20px;display:flex;justify-content:space-between;align-items:center}
+.total-bar .lbl{font-size:13px;opacity:.7}
+.total-bar .val{font-family:'DM Serif Display',serif;font-size:26px;letter-spacing:-.5px}
+
+/* Warnings */
+.warnings{background:var(--amber-lt);border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;margin-bottom:16px}
+.warnings .w-item{font-size:11px;color:var(--amber);padding:2px 0}
+.warnings .w-item::before{content:"⚠ "}
+
+/* Debug */
+.debug-toggle{text-align:center;margin-top:12px;font-size:11px;color:var(--muted);cursor:pointer;user-select:none}
+.debug-toggle:hover{color:var(--ink)}
+#rawJson{display:none;background:var(--ink);color:#A3E635;border-radius:8px;padding:14px;font-family:monospace;font-size:10px;overflow:auto;max-height:240px;margin-top:8px}
+
+/* Animations */
+#results>*{animation:fadeUp .3s ease both}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header">
+    <div class="logo-mark">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+    </div>
+    <div class="logo-text">
+      <h1>KhataSnap</h1>
+      <p>GST Bill Scanner</p>
+    </div>
+    <span class="badge">PP-OCRv5</span>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <div id="drop" class="drop" onclick="document.getElementById('fileInput').click()">
+        <div class="drop-icon">
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </div>
+        <h3>Drop your bill here</h3>
+        <p>JPG, PNG, WEBP · Max 20MB</p>
+      </div>
+      <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp">
+
+      <div class="preview-wrap" id="previewWrap">
+        <img id="previewImg" src="" alt="">
+      </div>
+
+      <button class="scan-btn" id="scanBtn" onclick="upload()" disabled>
+        Scan Invoice
+      </button>
+      <button class="scan-btn" id="newScanBtn" onclick="newScan()" style="display:none;margin-top:8px;background:linear-gradient(135deg,#1a5a1a,#0e3d0e);border-color:rgba(0,200,80,0.4)">
+        + Scan New Bill
+      </button>
+      <div class="status" id="status"></div>
+    </div>
+  </div>
+
+  <div id="results"></div>
+
+  <div class="debug-toggle" id="debugToggle" style="display:none" onclick="toggleDebug()">Show raw JSON ▾</div>
+  <pre id="rawJson"></pre>
+
+</div>
+
+<script>
+let file = null, lastData = null
+
+const drop = document.getElementById('drop')
+const fi   = document.getElementById('fileInput')
+const btn  = document.getElementById('scanBtn')
+const st   = document.getElementById('status')
+
+fi.onchange = e => e.target.files[0] && pick(e.target.files[0])
+drop.addEventListener('dragover', e=>{e.preventDefault();drop.classList.add('over')})
+drop.addEventListener('dragleave', ()=>drop.classList.remove('over'))
+drop.addEventListener('drop', e=>{e.preventDefault();drop.classList.remove('over');e.dataTransfer.files[0]&&pick(e.dataTransfer.files[0])})
+
+function pick(f){
+  file = f
+  const r = new FileReader()
+  r.onload = e => {
+    document.getElementById('previewImg').src = e.target.result
+    document.getElementById('previewWrap').style.display = 'block'
+  }
+  r.readAsDataURL(f)
+  drop.querySelector('h3').textContent = f.name
+  btn.disabled = false
+  setStatus('','')
+  document.getElementById('results').style.display = 'none'
+}
+
+async function upload(){
+  if(!file) return
+  btn.disabled = true; btn.classList.add('loading'); btn.textContent = 'Scanning…'
+  setStatus('<span class="dot"></span> Running OCR…', '')
+  document.getElementById('results').style.display = 'none'
+  document.getElementById('debugToggle').style.display = 'none'
+
+  const fd = new FormData(); fd.append('file', file)
+  try {
+    const res  = await fetch('/scan_invoice',{method:'POST',body:fd})
+    const data = await res.json()
+    lastData = data
+    if(!res.ok){ setStatus(data.detail||'Error', 'err'); return }
+    if(data.error){ setStatus(data.error,'warn'); return }
+    const g = data.confidence?.grade||'low'
+    setStatus(g==='high'?'✓ Scan complete':g==='medium'?'⚠ Scan complete — review data':'⚠ Low confidence — verify manually',
+              g==='high'?'ok':g==='medium'?'warn':'err')
+    render(data)
+  } catch(e){
+    setStatus('Cannot connect to server. Is uvicorn running?','err')
+  } finally {
+    btn.disabled=false; btn.classList.remove('loading'); btn.textContent='Scan Invoice'
+    if(lastData){
+      document.getElementById('debugToggle').style.display='block'
+      document.getElementById('newScanBtn').style.display='block'
+    }
+  }
+}
+
+function setStatus(html, cls){
+  st.innerHTML = html; st.className = 'status'+(cls?' '+cls:'')
+}
+
+function fmt(n){
+  return '₹'+Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})
+}
+
+function render(d){
+  const grade   = d.confidence?.grade||'low'
+  const warns   = d.confidence?.warnings||[]
+  const items   = d.items||[]
+
+  const confIcon = {high:'✓',medium:'~',low:'!'}[grade]
+  const confText = {high:'High confidence — data looks correct',
+                    medium:'Medium confidence — please review',
+                    low:'Low confidence — manual verification needed'}[grade]
+
+  const metaHTML = `
+    <div class="meta-cell"><div class="lbl">Vendor</div><div class="val">${d.vendor_name||'—'}</div></div>
+    <div class="meta-cell"><div class="lbl">Buyer</div><div class="val">${d.buyer||'—'}</div></div>
+    <div class="meta-cell"><div class="lbl">Invoice No.</div><div class="val">${d.invoice_no||'—'}</div></div>
+    <div class="meta-cell"><div class="lbl">Date</div><div class="val">${d.invoice_date||'—'}</div></div>
+    <div class="meta-cell full"><div class="lbl">GSTIN</div><div class="val mono">${d.gstin||'—'}</div></div>
+    ${d.phone?`<div class="meta-cell"><div class="lbl">Phone</div><div class="val">${d.phone}</div></div>`:''}
+  `
+
+  const rowsHTML = items.length ? items.map(it=>`
+    <tr>
+      <td><div class="item-name">${it.name||'—'}</div>${it.hsn?`<div class="item-hsn">HSN ${it.hsn}</div>`:''}</td>
+      <td><span class="qty-pill">${it.qty||0}${it.unit?' '+it.unit:''}</span></td>
+      <td>${it.rate?fmt(it.rate):'—'}</td>
+      <td>${it.gst_percent?it.gst_percent+'%':'—'}</td>
+      <td>${it.amount?fmt(it.amount):'—'}</td>
+    </tr>`).join('')
+    : `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--muted);font-size:12px">No line items detected</td></tr>`
+
+  const taxRows = [
+    ['Taxable amount', fmt(d.taxable_amount)],
+    d.cgst>0   ? ['CGST',     fmt(d.cgst)]   : null,
+    d.sgst>0   ? ['SGST',     fmt(d.sgst)]   : null,
+    d.igst>0   ? ['IGST',     fmt(d.igst)]   : null,
+    d.cess>0   ? ['CESS',     fmt(d.cess)]   : null,
+    d.discount_total>0 ? ['Discount', '− '+fmt(d.discount_total)] : null,
+  ].filter(Boolean).map(([l,v])=>`
+    <div class="tax-row"><span class="lbl">${l}</span><span class="val">${v}</span></div>`).join('')
+
+  const warnsHTML = warns.length
+    ? `<div class="warnings">${warns.map(w=>`<div class="w-item">${w}</div>`).join('')}</div>` : ''
+
+  document.getElementById('results').innerHTML = `
+    <div class="conf-bar ${grade}"><span class="conf-icon">${confIcon}</span>${confText}</div>
+    ${warnsHTML}
+    <div class="section-label">Invoice details</div>
+    <div class="meta-grid">${metaHTML}</div>
+    <div class="section-label">Line items (${items.length})</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Product</th><th>Qty</th><th>Rate</th><th>GST%</th><th>Amount</th></tr></thead>
+      <tbody>${rowsHTML}</tbody>
+    </table></div>
+    <div class="section-label">Tax summary</div>
+    <div class="tax-box">${taxRows||'<div class="tax-row"><span class="lbl">No tax data</span></div>'}</div>
+    <div class="total-bar"><span class="lbl">Total amount after tax</span><span class="val">${fmt(d.total)}</span></div>
+  `
+  document.getElementById('results').style.display = 'block'
+}
+
+function newScan(){
+  file = null
+  lastData = null
+  document.getElementById('previewImg').src = ''
+  document.getElementById('previewWrap').style.display = 'none'
+  document.getElementById('drop').querySelector('h3').textContent = 'Drop your bill here'
+  document.getElementById('drop').style.display = 'block'
+  document.getElementById('scanBtn').disabled = true
+  document.getElementById('scanBtn').textContent = 'Scan Invoice'
+  document.getElementById('newScanBtn').style.display = 'none'
+  document.getElementById('results').style.display = 'none'
+  document.getElementById('results').innerHTML = ''
+  document.getElementById('debugToggle').style.display = 'none'
+  document.getElementById('rawJson').style.display = 'none'
+  setStatus('','')
+  document.getElementById('fileInput').value = ''
+  window.scrollTo({top:0, behavior:'smooth'})
+}
+
+function toggleDebug(){
+  const el  = document.getElementById('rawJson')
+  const tog = document.getElementById('debugToggle')
+  if(el.style.display==='none'){
+    el.textContent = JSON.stringify(lastData,null,2)
+    el.style.display='block'; tog.textContent='Hide raw JSON ▴'
+  } else {
+    el.style.display='none'; tog.textContent='Show raw JSON ▾'
+  }
+}
+</script>
+</body>
+</html>

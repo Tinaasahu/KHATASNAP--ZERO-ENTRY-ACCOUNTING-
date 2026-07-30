@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KhataSnap – Low Stock</title>
+<link rel="stylesheet" href="/static/css/base.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-logo"><div class="brand">🧾 KhataSnap</div><div class="sub">Inventory · Finals</div></div>
+  <div class="nav-section">
+    <div class="nav-label">Main</div>
+    <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+    <a href="/products" class="nav-item"><span class="nav-icon">📦</span><span>Products</span></a>
+    <a href="/stock" class="nav-item"><span class="nav-icon">🔄</span><span>Stock</span></a>
+    <a href="/low-stock" class="nav-item active"><span class="nav-icon">⚠️</span><span>Low Stock</span></a>
+    <a href="/history" class="nav-item"><span class="nav-icon">📋</span><span>History</span></a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Setup</div>
+    <a href="/categories" class="nav-item"><span class="nav-icon">🏷️</span><span>Categories</span></a>
+    <a href="/suppliers" class="nav-item"><span class="nav-icon">🚚</span><span>Suppliers</span></a>
+    <a href="/test" class="nav-item"><span class="nav-icon">🧪</span><span>API Test</span></a>
+    <a href="/sre" class="nav-item"><span class="nav-icon">🔁</span><span>SRE Console</span></a>
+    <a href="/sre/smart" class="nav-item nav-item-smart"><span class="nav-icon">🧠</span><span>Smart SRE</span></a>
+    <a href="/api-docs" class="nav-item"><span class="nav-icon">📖</span><span>API Docs</span></a>
+  </div>
+  <div class="sidebar-bottom"><div class="server-status"><span class="sdot" id="sdot"></span><span id="slabel">Connecting…</span></div></div>
+</nav>
+
+<div class="main">
+  <div class="page-header">
+    <div class="page-title">Low Stock Alert · कम स्टॉक अलर्ट</div>
+    <div class="page-sub">Products that need restocking soon</div>
+  </div>
+
+  <div id="alertBanner" class="alert alert-warn hidden">
+    ⚠️ <span id="alertText"></span>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Product</th><th>Category</th><th>Current Qty</th>
+          <th>Min Stock</th><th>Deficit</th><th>Status</th><th>Action</th>
+        </tr></thead>
+        <tbody id="lowTable"></tbody>
+      </table>
+      <div class="empty hidden" id="emptyMsg">
+        <div class="empty-icon">✅</div>
+        <p>All products are well stocked! · सभी उत्पाद पर्याप्त स्टॉक में हैं</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/js/app.js"></script>
+<script>
+async function load() {
+  const data = await apiFetch('/inventory/low-stock');
+  if (!data) return;
+
+  const tbody = document.getElementById('lowTable');
+  const empty = document.getElementById('emptyMsg');
+  empty.classList.toggle('hidden', data.length > 0);
+
+  if (data.length) {
+    const banner = document.getElementById('alertBanner');
+    banner.classList.remove('hidden');
+    document.getElementById('alertText').textContent =
+      `${data.length} product(s) need restocking — ${data.filter(p=>p.current_qty===0).length} out of stock`;
+  }
+
+  tbody.innerHTML = data.map(p => {
+    const deficit = Math.max(0, p.min_stock - p.current_qty);
+    return `<tr>
+      <td><b>${x(p.name)}</b><div class="psku">${x(p.sku)}</div></td>
+      <td>${x(p.category_name||'—')}</td>
+      <td class="mono ${qtyClass(p.current_qty, p.min_stock)}" style="font-weight:800;font-size:16px">${p.current_qty}</td>
+      <td class="mono" style="color:var(--muted)">${p.min_stock}</td>
+      <td class="mono" style="color:var(--red);font-weight:700">${deficit > 0 ? '-'+deficit : '0'}</td>
+      <td>${statusBadge(p.current_qty, p.min_stock)}</td>
+      <td><a href="/stock" class="btn btn-green btn-sm">➕ Restock</a></td>
+    </tr>`;
+  }).join('');
+}
+
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>

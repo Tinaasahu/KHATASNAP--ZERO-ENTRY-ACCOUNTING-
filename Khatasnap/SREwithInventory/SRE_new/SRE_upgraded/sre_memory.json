@@ -1,0 +1,18 @@
+[
+  {
+    "id": "MEM-ACFC0C1C",
+    "items": ["Parle-G"],
+    "items_meta": [{"name": "Parle-G", "price": 20.0, "category": "Biscuit"}],
+    "amount": 20.0,
+    "frequency": 1,
+    "times_seen": 1,
+    "question_path": [],
+    "questions_asked": 0,
+    "memory_confidence": 1.0,
+    "final_probs": [
+      {"product": "Parle-G", "product_id": 1, "probability": 1.0, "count": 1, "boosted": false, "explanation": null}
+    ],
+    "first_seen": "2026-03-11T19:07:51.499128",
+    "last_seen": "2026-03-11T19:07:51.499130"
+  }
+]

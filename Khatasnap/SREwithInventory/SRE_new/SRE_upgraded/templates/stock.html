@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KhataSnap – Stock Management</title>
+<link rel="stylesheet" href="/static/css/base.css">
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="brand">🧾 KhataSnap</div>
+    <div class="sub">Inventory · Finals</div>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Main</div>
+    <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+    <a href="/products" class="nav-item"><span class="nav-icon">📦</span><span>Products</span></a>
+    <a href="/stock" class="nav-item active"><span class="nav-icon">🔄</span><span>Stock</span></a>
+    <a href="/low-stock" class="nav-item"><span class="nav-icon">⚠️</span><span>Low Stock</span></a>
+    <a href="/history" class="nav-item"><span class="nav-icon">📋</span><span>History</span></a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Setup</div>
+    <a href="/categories" class="nav-item"><span class="nav-icon">🏷️</span><span>Categories</span></a>
+    <a href="/suppliers" class="nav-item"><span class="nav-icon">🚚</span><span>Suppliers</span></a>
+    <a href="/test" class="nav-item"><span class="nav-icon">🧪</span><span>API Test</span></a>
+    <a href="/sre" class="nav-item"><span class="nav-icon">🔁</span><span>SRE Console</span></a>
+    <a href="/sre/smart" class="nav-item nav-item-smart"><span class="nav-icon">🧠</span><span>Smart SRE</span></a>
+    <a href="/api-docs" class="nav-item"><span class="nav-icon">📖</span><span>API Docs</span></a>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="server-status">
+      <span class="sdot" id="sdot"></span>
+      <span id="slabel">Connecting…</span>
+    </div>
+  </div>
+</nav>
+
+<div class="main">
+  <div class="page-header">
+    <div class="page-title">Stock Management · स्टॉक प्रबंधन</div>
+    <div class="page-sub">Add, remove or adjust stock quantities</div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:28px">
+
+    <!-- ADD STOCK -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">➕ Add Stock · स्टॉक जोड़ें</span></div>
+      <div class="card-body form-grid">
+        <div class="fg">
+          <label>Product · उत्पाद</label>
+          <select id="addProduct"><option value="">-- Select Product --</option></select>
+        </div>
+        <div class="fg">
+          <label>Quantity to Add · जोड़ने की मात्रा</label>
+          <input id="addQty" type="number" min="1" placeholder="e.g. 100">
+        </div>
+        <div class="fg">
+          <label>Reason / Supplier</label>
+          <input id="addReason" placeholder="e.g. Distributor delivery">
+        </div>
+        <button class="btn btn-green" onclick="addStock()">➕ Add Stock</button>
+      </div>
+    </div>
+
+    <!-- REMOVE STOCK -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">➖ Remove Stock · स्टॉक घटाएं</span></div>
+      <div class="card-body form-grid">
+        <div class="fg">
+          <label>Product · उत्पाद</label>
+          <select id="remProduct"><option value="">-- Select Product --</option></select>
+        </div>
+        <div class="fg">
+          <label>Quantity to Remove · घटाने की मात्रा</label>
+          <input id="remQty" type="number" min="1" placeholder="e.g. 5">
+        </div>
+        <div class="fg">
+          <label>Reason</label>
+          <input id="remReason" placeholder="e.g. Sold / Damaged">
+        </div>
+        <button class="btn btn-danger" onclick="removeStock()">➖ Remove Stock</button>
+      </div>
+    </div>
+
+    <!-- ADJUST STOCK -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">⚖️ Adjust Stock · स्टॉक ठीक करें</span></div>
+      <div class="card-body form-grid">
+        <div class="fg">
+          <label>Product · उत्पाद</label>
+          <select id="adjProduct" onchange="showCurrentQty()"><option value="">-- Select Product --</option></select>
+        </div>
+        <div class="fg">
+          <label>Current Qty (auto-filled)</label>
+          <input id="adjCurrentQty" readonly style="background:#f5f5f5;color:var(--muted)">
+        </div>
+        <div class="fg">
+          <label>Correct Qty · सही मात्रा</label>
+          <input id="adjQty" type="number" min="0" placeholder="Enter correct quantity">
+        </div>
+        <div class="fg">
+          <label>Reason · कारण</label>
+          <select id="adjReason">
+            <option value="correction">Physical count correction</option>
+            <option value="damaged">Damaged / Broken</option>
+            <option value="expired">Expired</option>
+            <option value="theft">Theft / Shrinkage</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <button class="btn btn-blue" onclick="adjustStock()">⚖️ Apply Adjustment</button>
+      </div>
+    </div>
+  </div>
+  <!-- OCR2 + ASR INPUT PANELS -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:28px">
+
+  <!-- OCR 2 PANEL -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">📋 OCR 2 · Add Stock from Distributor Bill</span>
+    </div>
+    <div class="card-body form-grid">
+      <div class="fg">
+        <label>Paste OCR Text · OCR टेक्स्ट पेस्ट करें</label>
+        <textarea id="ocrText" placeholder="Paste distributor bill text here.
+
+Example:
+Parle-G Biscuit 100
+Maggi Noodles 50
+Colgate 30" style="min-height:120px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6;padding:9px 12px;background:var(--bg);border:1.5px solid var(--border);border-radius:9px;outline:none;resize:vertical;width:100%"></textarea>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          💡 Format: <b>Item Name</b> then <b>Quantity</b> on each line
+        </div>
+      </div>
+      <button class="btn btn-green" onclick="parseOCR()">⚙️ Detect Items</button>
+
+      <div id="ocrParsedSection" style="display:none">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">
+          Detected Items · पहचाने गए आइटम
+        </div>
+        <div id="ocrParsedRows"></div>
+        <button class="btn btn-green" style="width:100%;justify-content:center;margin-top:12px" onclick="applyOCR()">
+          ✅ Apply to Inventory
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ASR FALLBACK PANEL -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">🎙️ ASR Fallback · Voice Sale</span>
+    </div>
+    <div class="card-body form-grid">
+      <div class="fg">
+        <label>Paste Voice Transcript · वॉयस ट्रांसक्रिप्ट</label>
+        <textarea id="asrText" placeholder="Paste ASR transcript here.
+
+Examples:
+  sold 5 Parle-G
+  sell 3 Maggi Noodles
+  Colgate 2 sold" style="min-height:120px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6;padding:9px 12px;background:var(--bg);border:1.5px solid var(--border);border-radius:9px;outline:none;resize:vertical;width:100%"></textarea>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          💡 Formats: <b>"sold 5 Parle-G"</b> · <b>"Maggi 3 sold"</b>
+        </div>
+      </div>
+      <button class="btn btn-ghost" style="border:1.5px solid var(--border)" onclick="parseASR()">⚙️ Parse Text</button>
+
+      <div id="asrResult" style="display:none;border-radius:9px;padding:12px 14px;font-size:13px;font-weight:600;line-height:1.6"></div>
+
+      <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="applyASR()">
+        ✅ Apply Sale
+      </button>
+    </div>
+  </div>
+
+</div>
+
+  <!-- CURRENT INVENTORY TABLE -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">📦 Current Inventory · वर्तमान इन्वेंटरी</span>
+      <div class="search-wrap" style="max-width:250px">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="searchInp" placeholder="Search…" oninput="renderTable()">
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Product</th><th>SKU</th><th>Category</th>
+          <th>Qty</th><th>Min</th><th>Status</th>
+        </tr></thead>
+        <tbody id="invTable"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/js/app.js"></script>
+<script>
+let inventory = [];
+
+async function loadInventory() {
+  inventory = await apiFetch('/inventory');
+  if (!inventory) return;
+  populateSelects();
+  renderTable();
+}
+
+function populateSelects() {
+  const opts = inventory.map(p =>
+    `<option value="${p.id}">${x(p.name)} (${p.current_qty} ${x(p.unit_type)})</option>`
+  ).join('');
+  ['addProduct','remProduct','adjProduct'].forEach(id => {
+    document.getElementById(id).innerHTML = '<option value="">-- Select Product --</option>' + opts;
+  });
+}
+
+function showCurrentQty() {
+  const pid = document.getElementById('adjProduct').value;
+  const p   = inventory.find(p => String(p.id) === pid);
+  document.getElementById('adjCurrentQty').value = p ? p.current_qty : '';
+}
+
+function renderTable() {
+  const q    = document.getElementById('searchInp').value.toLowerCase();
+  const list = inventory.filter(p => p.name.toLowerCase().includes(q));
+  document.getElementById('invTable').innerHTML = list.map(p => {
+    const qc = p.current_qty === 0 ? 'qty-out' : p.current_qty <= p.min_stock ? 'qty-low' : 'qty-ok';
+    return `<tr>
+      <td><b>${x(p.name)}</b></td>
+      <td class="mono" style="font-size:11px">${x(p.sku)}</td>
+      <td>${x(p.category||'—')}</td>
+      <td class="mono ${qc}" style="font-weight:800;font-size:16px">${p.current_qty} <span style="font-size:10px;color:var(--muted)">${x(p.unit_type)}</span></td>
+      <td class="mono" style="color:var(--muted)">${p.min_stock}</td>
+      <td>${statusBadge(p.current_qty, p.min_stock)}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function addStock() {
+  const pid    = document.getElementById('addProduct').value;
+  const qty    = parseInt(document.getElementById('addQty').value);
+  const reason = document.getElementById('addReason').value;
+  if (!pid) return toast('Select a product · उत्पाद चुनें', 'err');
+  if (!qty || qty <= 0) return toast('Enter valid quantity · सही मात्रा दर्ज करें', 'err');
+  const res = await apiFetch('/stock/add', {
+    method: 'POST', body: JSON.stringify({ product_id: pid, qty, reason })
+  });
+  if (res?.success) {
+    toast(`Added ${qty} units ✓ · ${qty} इकाइयाँ जोड़ी गईं`, 'ok');
+    document.getElementById('addQty').value = '';
+    loadInventory();
+  } else { toast(res?.error || 'Error', 'err'); }
+}
+
+async function removeStock() {
+  const pid    = document.getElementById('remProduct').value;
+  const qty    = parseInt(document.getElementById('remQty').value);
+  const reason = document.getElementById('remReason').value;
+  if (!pid) return toast('Select a product', 'err');
+  if (!qty || qty <= 0) return toast('Enter valid quantity', 'err');
+  const res = await apiFetch('/stock/remove', {
+    method: 'POST', body: JSON.stringify({ product_id: pid, qty, reason })
+  });
+  if (res?.success) {
+    toast(`Removed ${qty} units ✓`, 'ok');
+    document.getElementById('remQty').value = '';
+    loadInventory();
+  } else { toast(res?.error || 'Error', 'err'); }
+}
+
+async function adjustStock() {
+  const pid     = document.getElementById('adjProduct').value;
+  const new_qty = parseInt(document.getElementById('adjQty').value);
+  const reason  = document.getElementById('adjReason').value;
+  if (!pid) return toast('Select a product', 'err');
+  if (isNaN(new_qty) || new_qty < 0) return toast('Enter correct quantity', 'err');
+  const res = await apiFetch('/stock/adjust', {
+    method: 'POST', body: JSON.stringify({ product_id: pid, new_qty, reason })
+  });
+  if (res?.success) {
+    toast(`Stock adjusted ✓ · स्टॉक ठीक किया गया`, 'ok');
+    document.getElementById('adjQty').value = '';
+    loadInventory();
+  } else { toast(res?.error || 'Error', 'err'); }
+}
+
+loadInventory();
+// ── OCR 2 ─────────────────────────────────────────────────────────────────────
+let parsedOCR = [];
+
+function parseOCR() {
+  const raw = document.getElementById('ocrText').value.trim();
+  if (!raw) return toast('Paste OCR text first', 'err');
+
+  parsedOCR = [];
+  raw.split('\n').map(l => l.trim()).filter(Boolean).forEach(line => {
+    const m1 = line.match(/^(.+?)\s+(\d+)\s*$/);
+    const m2 = line.match(/^(\d+)\s+(.+?)\s*$/);
+    if (m1 && isNaN(m1[1].trim()))
+      parsedOCR.push({ name: m1[1].trim(), qty: parseInt(m1[2]), checked: true });
+    else if (m2)
+      parsedOCR.push({ name: m2[2].trim(), qty: parseInt(m2[1]), checked: true });
+  });
+
+  if (!parsedOCR.length) return toast('No items detected. Check format.', 'err');
+
+  document.getElementById('ocrParsedRows').innerHTML = parsedOCR.map((p, i) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <input type="checkbox" id="oc${i}" checked
+             onchange="parsedOCR[${i}].checked=this.checked"
+             style="accent-color:var(--accent);width:15px;height:15px;cursor:pointer">
+      <label for="oc${i}" style="flex:1;font-weight:600;cursor:pointer">${x(p.name)}</label>
+      <span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--green)">+${p.qty}</span>
+    </div>`).join('');
+
+  document.getElementById('ocrParsedSection').style.display = 'block';
+  toast(`Detected ${parsedOCR.length} item(s) · ${parsedOCR.length} आइटम मिले`, 'info');
+}
+
+async function applyOCR() {
+  const sel = parsedOCR.filter(p => p.checked);
+  if (!sel.length) return toast('Select at least one item', 'err');
+
+  const res = await apiFetch('/ocr2', {
+    method: 'POST',
+    body: JSON.stringify({ items: sel.map(p => ({ name: p.name, qty: p.qty })) })
+  });
+  if (!res) return;
+
+  res.log.forEach(entry => {
+    const msg   = entry.message || entry;
+    const color = entry.status === 'created' ? 'var(--blue)' : 'var(--green)';
+    console.log(msg);
+  });
+
+  document.getElementById('ocrText').value = '';
+  document.getElementById('ocrParsedSection').style.display = 'none';
+  parsedOCR = [];
+  toast('Stock added ✓ · स्टॉक जोड़ा गया', 'ok');
+  loadInventory();
+}
+
+// ── ASR FALLBACK ──────────────────────────────────────────────────────────────
+let parsedASR = null;
+
+function parseASR() {
+  const raw   = document.getElementById('asrText').value.trim();
+  if (!raw) return toast('Paste ASR text first', 'err');
+
+  const lower = raw.toLowerCase();
+  let name, qty;
+
+  let m = lower.match(/(?:sold?|sell)\s+(\d+)\s+(.+)/);
+  if (m) { qty = parseInt(m[1]); name = m[2].trim(); }
+
+  if (!name) {
+    m = lower.match(/^(.+?)\s+(\d+)\s*(?:sold?|pieces?|units?|nos?\.?)?$/);
+    if (m && isNaN(m[1].trim())) { name = m[1].trim(); qty = parseInt(m[2]); }
+  }
+
+  const box = document.getElementById('asrResult');
+  box.style.display = 'block';
+
+  if (!name || !qty || qty <= 0) {
+    box.style.background = '#fee2e2';
+    box.style.border     = '1px solid #fca5a5';
+    box.style.color      = 'var(--red)';
+    box.innerHTML        = '⚠️ Could not understand. Try: <b>"sold 5 Parle-G"</b>';
+    parsedASR = null;
+    return;
+  }
+
+  // fuzzy match against loaded inventory
+  const matched = inventory.find(i =>
+    i.name.toLowerCase().includes(name) ||
+    name.includes(i.name.toLowerCase())
+  );
+
+  if (matched) {
+    parsedASR = { name: matched.name, qty };
+    box.style.background = '#dcfce7';
+    box.style.border     = '1px solid #86efac';
+    box.style.color      = 'var(--green)';
+    box.innerHTML = `✅ Sell <b>${qty}</b> × <b>${matched.name}</b><br>
+      Stock: ${matched.current_qty} → after: <b>${Math.max(0, matched.current_qty - qty)}</b>`;
+  } else {
+    parsedASR = null;
+    box.style.background = '#fee2e2';
+    box.style.border     = '1px solid #fca5a5';
+    box.style.color      = 'var(--red)';
+    box.innerHTML        = `⚠️ "<b>${name}</b>" not found in inventory`;
+  }
+}
+
+async function applyASR() {
+  if (!parsedASR) return toast('Parse the text first · पहले पार्स करें', 'err');
+
+  const res = await apiFetch('/asr', {
+    method: 'POST',
+    body: JSON.stringify({ name: parsedASR.name, qty: parsedASR.qty })
+  });
+  if (!res) return;
+
+  if (res.success) {
+    document.getElementById('asrText').value  = '';
+    document.getElementById('asrResult').style.display = 'none';
+    parsedASR = null;
+    toast(`Sale recorded ✓ · बिक्री दर्ज की गई`, 'ok');
+    loadInventory();
+  } else {
+    toast(res.log?.[0]?.message || 'Error', 'err');
+  }
+}
+</script>
+</body>
+</html>

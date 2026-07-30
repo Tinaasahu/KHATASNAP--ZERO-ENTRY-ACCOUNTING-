@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KhataSnap – SRE Console</title>
+<link rel="stylesheet" href="/static/css/base.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-logo"><div class="brand">🧾 KhataSnap</div><div class="sub">Inventory · Finals</div></div>
+  <div class="nav-section">
+    <div class="nav-label">Main</div>
+    <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+    <a href="/products" class="nav-item"><span class="nav-icon">📦</span><span>Products</span></a>
+    <a href="/stock" class="nav-item"><span class="nav-icon">🔄</span><span>Stock</span></a>
+    <a href="/low-stock" class="nav-item"><span class="nav-icon">⚠️</span><span>Low Stock</span></a>
+    <a href="/history" class="nav-item"><span class="nav-icon">📋</span><span>History</span></a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Setup</div>
+    <a href="/categories" class="nav-item"><span class="nav-icon">🏷️</span><span>Categories</span></a>
+    <a href="/suppliers" class="nav-item"><span class="nav-icon">🚚</span><span>Suppliers</span></a>
+    <a href="/test" class="nav-item"><span class="nav-icon">🧪</span><span>API Test</span></a>
+    <a href="/sre" class="nav-item active"><span class="nav-icon">🔁</span><span>SRE Console</span></a>
+    <a href="/sre/smart" class="nav-item nav-item-smart"><span class="nav-icon">🧠</span><span>Smart SRE</span></a>
+    <a href="/api-docs" class="nav-item"><span class="nav-icon">📖</span><span>API Docs</span></a>
+  </div>
+  <div class="sidebar-bottom"><div class="server-status"><span class="sdot" id="sdot"></span><span id="slabel">Connecting…</span></div></div>
+</nav>
+
+<div class="main">
+  <div class="page-header">
+    <div class="page-title">🔁 SRE Console · स्मार्ट सुधार</div>
+    <div class="page-sub">Review uncertain calculator predictions and reconcile inventory</div>
+  </div>
+
+  <!-- RECONCILE PANEL -->
+  <div class="card" style="margin-bottom:24px">
+    <div class="card-header">
+      <span class="card-title">⚖️ Night Reconciliation · रात्रि सुधार</span>
+    </div>
+    <div class="card-body">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:16px">
+        Paste physical stock counts to correct inventory. One product per line.
+        <b>Format: product_id, correct_qty, reason</b>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start">
+        <textarea id="reconcileInput"
+          style="font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.7;padding:12px;background:var(--bg);border:1.5px solid var(--border);border-radius:9px;outline:none;resize:vertical;min-height:100px;width:100%"
+          placeholder="1, 45, physical count&#10;2, 30, physical count&#10;3, 12, damaged goods removed"></textarea>
+        <button class="btn btn-primary" onclick="applyReconcile()" style="white-space:nowrap">⚖️ Apply</button>
+      </div>
+      <div id="reconcileResult" style="display:none;margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- CONFLICTS TABLE -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">⚠️ Pending Conflicts · अनिश्चित मैपिंग</span>
+      <button class="btn btn-ghost btn-sm" onclick="loadConflicts()">🔄 Refresh</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Transaction</th>
+          <th>Value ₹</th>
+          <th>Mapped Product</th>
+          <th>Confidence</th>
+          <th>Status</th>
+          <th>Correct To</th>
+          <th>Actions</th>
+        </tr></thead>
+        <tbody id="conflictTable"></tbody>
+      </table>
+      <div class="empty hidden" id="emptyMsg">
+        <div class="empty-icon">✅</div>
+        <p>No pending conflicts! All mappings resolved.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CORRECT MAPPING MODAL -->
+<div class="overlay" id="correctModal">
+  <div class="modal" style="width:440px">
+    <div class="modal-header">
+      <span class="modal-title">✏️ Correct Mapping</span>
+      <button class="modal-close" onclick="close_('correctModal')">✕</button>
+    </div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:16px">
+      Select the correct product for this value mapping.
+    </div>
+    <div class="fg">
+      <label>Correct Product · सही उत्पाद</label>
+      <select id="correctProduct"><option value="">-- Select Product --</option></select>
+    </div>
+    <input type="hidden" id="correctTxnId">
+    <input type="hidden" id="correctValueIdx">
+    <div class="modal-footer">
+      <button class="btn btn-cancel" onclick="close_('correctModal')">Cancel</button>
+      <button class="btn btn-primary btn-submit" onclick="saveCorrection()">💾 Save Correction</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/js/app.js"></script>
+<script>
+let conflicts = [];
+let products  = [];
+
+async function loadAll() {
+  [conflicts, products] = await Promise.all([
+    apiFetch('/sre/conflicts'),
+    apiFetch('/products')
+  ]);
+  if (!conflicts || !products) return;
+
+  // Populate product select
+  const sel = document.getElementById('correctProduct');
+  sel.innerHTML = '<option value="">-- Select Product --</option>' +
+    products.map(p => `<option value="${p.id}">${x(p.name)}</option>`).join('');
+
+  renderConflicts();
+}
+
+function loadConflicts() { loadAll(); }
+
+function renderConflicts() {
+  const tbody = document.getElementById('conflictTable');
+  const empty = document.getElementById('emptyMsg');
+  empty.classList.toggle('hidden', conflicts.length > 0);
+
+  tbody.innerHTML = conflicts.map(c => {
+    const conf    = parseFloat(c.confidence || 0);
+    const confPct = (conf * 100).toFixed(0) + '%';
+    const confColor = conf >= 0.75 ? 'var(--green)' : conf >= 0.50 ? 'var(--yellow)' : 'var(--red)';
+    const statusBadge = c.status === 'uncertain'
+      ? '<span class="badge b-low">⚠️ Uncertain</span>'
+      : '<span class="badge b-gray">⏳ Pending</span>';
+
+    return `<tr>
+      <td class="mono" style="font-size:10px;color:var(--muted)">${x(c.transaction_id)}</td>
+      <td class="mono" style="font-weight:700">${rupee(c.value)}</td>
+      <td><b>${x(c.product_name || '—')}</b></td>
+      <td class="mono" style="color:${confColor};font-weight:700">${confPct}</td>
+      <td>${statusBadge}</td>
+      <td>
+        <select onchange="quickCorrect('${x(c.transaction_id)}',${c.value_index},this.value)"
+          style="padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;background:var(--bg);font-family:inherit;outline:none">
+          <option value="">-- Select --</option>
+          ${products.map(p => `<option value="${p.id}" ${p.id === c.product_id ? 'selected' : ''}>${x(p.name)}</option>`).join('')}
+        </select>
+      </td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-green btn-sm" onclick="resolveMapping('${x(c.transaction_id)}',${c.value_index},${c.product_id},'confirm')" title="Confirm mapping">✅</button>
+          <button class="btn btn-danger btn-sm" onclick="resolveMapping('${x(c.transaction_id)}',${c.value_index},null,'ignore')" title="Ignore mapping">❌</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function quickCorrect(txnId, valueIdx, productId) {
+  if (!productId) return;
+  await resolveMapping(txnId, valueIdx, productId, 'correct');
+}
+
+async function resolveMapping(txnId, valueIdx, productId, action) {
+  const res = await apiFetch('/sre/confirm-mapping', {
+    method: 'POST',
+    body: JSON.stringify({
+      transaction_id: txnId,
+      value_index:    valueIdx,
+      product_id:     productId,
+      action:         action
+    })
+  });
+  if (res?.success) {
+    const msg = action === 'confirm' ? '✅ Confirmed' : action === 'ignore' ? '❌ Ignored' : '✏️ Corrected';
+    toast(msg, 'ok');
+    await loadAll();
+  }
+}
+
+async function applyReconcile() {
+  const raw = document.getElementById('reconcileInput').value.trim();
+  if (!raw) return toast('Enter corrections first', 'err');
+
+  const corrections = [];
+  raw.split('\n').forEach(line => {
+    const parts = line.split(',').map(s => s.trim());
+    if (parts.length >= 2) {
+      corrections.push({
+        product_id:  parseInt(parts[0]),
+        correct_qty: parseInt(parts[1]),
+        reason:      parts[2] || 'SRE reconciliation'
+      });
+    }
+  });
+
+  if (!corrections.length) return toast('No valid corrections found', 'err');
+
+  const res = await apiFetch('/sre/reconcile', {
+    method: 'POST',
+    body: JSON.stringify({ corrections })
+  });
+
+  const box = document.getElementById('reconcileResult');
+  box.style.display = 'block';
+
+  if (res?.success) {
+    box.innerHTML = `
+      <div class="alert alert-ok">
+        ✅ Applied ${res.log.length} correction(s) successfully!
+        <div style="margin-top:8px;font-size:12px;font-family:'JetBrains Mono',monospace">
+          ${res.log.map(l => `Product #${l.product_id}: ${l.old_qty} → ${l.new_qty}`).join('<br>')}
+        </div>
+      </div>`;
+    toast('Reconciliation applied ✓', 'ok');
+  } else {
+    box.innerHTML = `<div class="alert alert-err">❌ Error applying reconciliation</div>`;
+  }
+}
+
+loadAll();
+setInterval(loadAll, 20000);
+</script>
+</body>
+</html>

@@ -1,0 +1,92 @@
+{
+  "$schema": "KhataSnap Unified Data Contract v1.0",
+  "description": "Every inter-service message MUST conform to one of these shapes.",
+
+  "bill": {
+    "bill_id":            "string  — auto-generated TXN-YYYYMMDD-XXXX",
+    "source":             "string  — ocr | voice | manual | calculator",
+    "vendor_name":        "string  — nullable, OCR only",
+    "invoice_no":         "string  — nullable, OCR only",
+    "invoice_date":       "string  — ISO-8601 or null",
+    "items": [
+      {
+        "name":           "string  — raw name from source",
+        "matched_name":   "string  — fuzzy-matched DB product name or null",
+        "product_id":     "int     — FK to products table or null",
+        "qty":            "number  — quantity",
+        "unit":           "string  — pcs | kg | litre | packet | dozen",
+        "price":          "number  — unit price",
+        "amount":         "number  — qty × price",
+        "confidence":     "number  — 0.0–1.0 match confidence",
+        "match_method":   "string  — exact | fuzzy | alias | phonetic | manual"
+      }
+    ],
+    "subtotal":           "number",
+    "tax":                "number  — 0 if not detected",
+    "total_amount":       "number",
+    "payment_mode":       "string  — cash | upi | credit",
+    "confirmation_status":"string  — pending | confirmed | rejected",
+    "sre_flags":          "array   — see sre_flag shape below",
+    "raw_data":           "object  — source-specific raw payload",
+    "created_at":         "string  — ISO-8601",
+    "confirmed_at":       "string  — ISO-8601 or null"
+  },
+
+  "sre_flag": {
+    "flag_id":            "string  — auto-generated",
+    "flag_type":          "string  — price_mismatch | qty_anomaly | unknown_product | duplicate_bill | stock_warning",
+    "severity":           "string  — info | warning | critical",
+    "field":              "string  — which field triggered (e.g. items[2].price)",
+    "expected":           "any     — what DB/history expects",
+    "actual":             "any     — what the source reported",
+    "message":            "string  — human-readable explanation",
+    "confidence":         "number  — 0.0–1.0",
+    "resolution":         "string  — null | accepted | corrected | ignored",
+    "corrected_value":    "any     — user's correction or null"
+  },
+
+  "voice_input": {
+    "transcript":         "string  — raw speech-to-text",
+    "resolved_transcript":"string  — after nickname/alias resolution",
+    "language":           "string  — en | hi | hinglish",
+    "items":              "array   — same item shape as bill.items",
+    "payment_mode":       "string  — cash | upi | credit",
+    "overall_confidence": "number  — 0.0–1.0"
+  },
+
+  "inventory_delta": {
+    "product_id":         "int",
+    "product_name":       "string",
+    "action":             "string  — sale | restock | adjust | return",
+    "qty_change":         "number  — negative for sale, positive for restock",
+    "old_qty":            "number",
+    "new_qty":            "number",
+    "source":             "string  — ocr | voice | manual | calculator | sre",
+    "bill_id":            "string  — FK to bill or null",
+    "reason":             "string  — optional explanation",
+    "timestamp":          "string  — ISO-8601"
+  },
+
+  "calculator_entry": {
+    "session_id":         "string  — auto-generated",
+    "expression":         "string  — e.g. '20+30+50'",
+    "operands":           "array   — [20, 30, 50]",
+    "result":             "number  — 100",
+    "mapped_products":    "array   — [{value, product_id, product_name, confidence}]",
+    "sre_flags":          "array   — see sre_flag shape",
+    "spoken_context": {
+      "raw_transcript": "string  — underlying captured text",
+      "mentions":       "array   — matched entities array",
+      "resolution_method": "string"
+    },
+    "timestamp":          "string  — ISO-8601"
+  },
+
+  "api_response": {
+    "success":            "boolean",
+    "data":               "object  — response payload",
+    "error":              "string  — null on success",
+    "sre_flags":          "array   — empty if no flags",
+    "timestamp":          "string  — ISO-8601"
+  }
+}
