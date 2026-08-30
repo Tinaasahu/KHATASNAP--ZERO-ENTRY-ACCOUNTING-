@@ -5,7 +5,7 @@ All data stored locally in khatasnap.db — no internet required.
 import sqlite3
 import os
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "khatasnap.db")
+DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "khatasnap.db"))
 
 
 def get_conn():

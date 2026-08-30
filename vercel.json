@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "buildCommand": "cd Khatasnap/frontend && npm install && npm run build",
+  "outputDirectory": "Khatasnap/frontend/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
