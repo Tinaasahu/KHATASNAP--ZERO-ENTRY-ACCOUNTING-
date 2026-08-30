@@ -164,7 +164,18 @@ async def _forward_file(url: str, file: UploadFile, timeout: float = 60.0):
         raise HTTPException(500, f"Service call failed: {exc}")
 
 
-# ── Health ───────────────────────────────────────────────────────────────────
+# ── Health & Root ─────────────────────────────────────────────────────────────
+@app.get("/")
+async def root():
+    return {
+        "status": "ok",
+        "service": "KhataSnap Orchestrator API",
+        "docs": "/docs",
+        "health": "/health",
+        "timestamp": _now(),
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "orchestrator", "timestamp": _now()}
