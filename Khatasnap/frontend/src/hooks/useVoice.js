@@ -9,6 +9,7 @@ export function useVoice({ parseFn = transcribe, autoStopSeconds = 10 } = {}) {
   const [timeLeft, setTimeLeft] = useState(0); // countdown seconds remaining
   const recognitionRef = useRef(null);
   const finalTranscriptRef = useRef('');
+  const latestTranscriptRef = useRef('');
   const autoStopTimerRef = useRef(null);
   const countdownIntervalRef = useRef(null);
   const processedRef = useRef(false); // guard: ensure processTranscript called exactly once per session
@@ -54,6 +55,7 @@ export function useVoice({ parseFn = transcribe, autoStopSeconds = 10 } = {}) {
     r.lang = 'en-IN';
     recognitionRef.current = r;
     finalTranscriptRef.current = '';
+    latestTranscriptRef.current = '';
     processedRef.current = false; // reset guard for this session
 
     r.onstart = () => {
@@ -86,14 +88,27 @@ export function useVoice({ parseFn = transcribe, autoStopSeconds = 10 } = {}) {
           interim += e.results[i][0].transcript;
         }
       }
-      setTranscript(finalTranscriptRef.current + interim);
+      const combined = (finalTranscriptRef.current + interim).trim();
+      latestTranscriptRef.current = combined;
+      setTranscript(combined);
     };
 
     r.onerror = (e) => {
       clearTimers();
-      if (e.error === 'aborted') return;
-      toast.error('Microphone error: ' + e.error);
-      setState('error');
+      if (e.error === 'aborted' || e.error === 'no-speech') {
+        const textToProcess = (latestTranscriptRef.current || finalTranscriptRef.current || '').trim();
+        if (!textToProcess) {
+          setState('idle');
+        }
+        return;
+      }
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        toast.error('Microphone permission denied. Please allow mic in browser settings.');
+        setState('error');
+        return;
+      }
+      console.warn('SpeechRecognition notice:', e.error);
+      setState('idle');
     };
 
     // KEY FIX: r.onend fires whenever recognition stops — auto-timer OR manual stop.
@@ -102,29 +117,36 @@ export function useVoice({ parseFn = transcribe, autoStopSeconds = 10 } = {}) {
       clearTimers();
       if (!processedRef.current) {
         processedRef.current = true;
-        processTranscriptRef.current?.(finalTranscriptRef.current);
+        const textToProcess = (latestTranscriptRef.current || finalTranscriptRef.current || '').trim();
+        if (textToProcess) {
+          processTranscriptRef.current?.(textToProcess);
+        } else {
+          setState('idle');
+        }
       }
     };
 
     try {
       r.start();
     } catch (e) {
-      toast.error('Could not start microphone');
-      setState('error');
+      console.warn('Could not start microphone immediately:', e);
+      setState('idle');
     }
   }, [toast, clearTimers, autoStopSeconds]);
 
   const processTranscript = useCallback(async (text) => {
-    if (!text.trim()) {
+    const cleanText = (text || '').trim();
+    if (!cleanText) {
       setState('idle');
       return;
     }
     setState('transcribing');
     try {
-      const res = await parseFn(text);
+      const res = await parseFn(cleanText);
       setIntent(res);
       setState('done');
     } catch (err) {
+      console.error('Voice parsing failed:', err);
       setState('error');
     }
   }, [parseFn]);
@@ -137,9 +159,10 @@ export function useVoice({ parseFn = transcribe, autoStopSeconds = 10 } = {}) {
     if (recognitionRef.current && state === 'listening') {
       processedRef.current = true; // claim processing BEFORE r.stop() triggers onend
       try { recognitionRef.current.stop(); } catch(e) {}
-      processTranscript(finalTranscriptRef.current);
+      const textToProcess = (latestTranscriptRef.current || finalTranscriptRef.current || transcript || '').trim();
+      processTranscript(textToProcess);
     }
-  }, [state, processTranscript, clearTimers]);
+  }, [state, processTranscript, clearTimers, transcript]);
 
   const reset = useCallback(() => {
     setState('idle');

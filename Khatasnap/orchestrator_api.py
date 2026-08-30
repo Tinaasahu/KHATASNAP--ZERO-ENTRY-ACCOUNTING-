@@ -15,6 +15,7 @@ import time
 import httpx
 from datetime import datetime
 from contextlib import asynccontextmanager
+import numpy as np
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -71,12 +72,30 @@ def _now():
     return datetime.now().isoformat()
 
 
+def sanitize_json(obj):
+    """Convert numpy types and non-serializable objects to JSON-safe Python types."""
+    if isinstance(obj, dict):
+        return {k: sanitize_json(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [sanitize_json(v) for v in obj]
+    elif isinstance(obj, np.generic):
+        return obj.item()
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif hasattr(obj, 'item') and callable(getattr(obj, 'item')):
+        try:
+            return obj.item()
+        except Exception:
+            pass
+    return obj
+
+
 def _ok(data, sre_flags=None):
     return JSONResponse({
         "success": True,
-        "data": data,
+        "data": sanitize_json(data),
         "error": None,
-        "sre_flags": sre_flags or [],
+        "sre_flags": sanitize_json(sre_flags or []),
         "timestamp": _now(),
     })
 
@@ -86,6 +105,25 @@ def _err(msg, status=400):
         {"success": False, "data": None, "error": msg, "sre_flags": [], "timestamp": _now()},
         status_code=status,
     )
+
+
+def _products_with_aliases(conn):
+    rows = conn.execute("""
+        SELECT p.id, p.name, p.selling_price, p.current_qty, p.emoji,
+               GROUP_CONCAT(pa.alias, '|||') AS aliases
+        FROM products p
+        LEFT JOIN product_aliases pa ON pa.product_id = p.id
+        WHERE p.is_active = 1
+        GROUP BY p.id
+    """).fetchall()
+    res = []
+    for r in rows:
+        d = dict(r)
+        alias_list = [a.lower().strip() for a in (d.pop("aliases") or "").split("|||") if a.strip()]
+        d["aliases"] = alias_list
+        res.append(d)
+    return res
+
 
 
 async def _forward_post(url: str, payload: dict, timeout: float = 30.0):
@@ -728,8 +766,30 @@ async def reconciliation_eod(day: str = ""):
 async def ocr_upload(file: UploadFile = File(...)):
     logger.info(f"OCR upload: {file.filename} ({file.content_type})")
 
-    # Forward to OCR micro-service
-    result = await _forward_file(f"{OCR_URL}/scan", file)
+    contents = await file.read()
+    result = None
+
+    # Try external OCR service first if running
+    if OCR_URL:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.post(
+                    f"{OCR_URL}/scan",
+                    files={"file": (file.filename or "upload.jpg", contents, file.content_type or "image/jpeg")}
+                )
+                if resp.status_code == 200:
+                    result = resp.json()
+        except Exception as e:
+            logger.info(f"External OCR at {OCR_URL} unavailable ({e}), using built-in OCR pipeline.")
+
+    # If external service is unavailable, execute built-in OCR pipeline directly
+    if not result:
+        try:
+            from orchestrator import process_invoice
+            result = process_invoice(contents, file.filename or "upload.jpg")
+        except Exception as pipe_err:
+            logger.error(f"In-process OCR pipeline error: {pipe_err}")
+            result = {"items": [], "total": 0}
 
     # Build DATA_CONTRACT bill shape (pending confirmation)
     items = []
@@ -1060,63 +1120,20 @@ async def ocr_confirm(request: Request):
         
     bill["sre_flags"] = sre_flags
 
-    # ── DB write ──────────────────────────────────────────────────────────
-    conn = get_conn()
-    conn.execute("""
-        INSERT OR REPLACE INTO confirmed_bills
-            (bill_id, source, vendor_name, invoice_no, invoice_date, items,
-             subtotal, tax, total_amount, payment_mode, confirmation_status,
-             raw_data, sre_flags, created_at, confirmed_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
-        bill["bill_id"], bill["source"], bill.get("vendor_name"),
-        bill.get("invoice_no"), bill.get("invoice_date"),
-        json.dumps(bill["items"]), bill["subtotal"], bill["tax"],
-        bill["total_amount"], bill["payment_mode"], "confirmed",
-        json.dumps(bill.get("raw_data")), json.dumps(sre_flags),
-        bill["created_at"], bill["confirmed_at"],
-    ))
-
-    # Also write to legacy completed_bills for backward compat
-    conn.execute("""
-        INSERT OR IGNORE INTO completed_bills (bill_no, items, total_amount, payment_mode, source)
-        VALUES (?,?,?,?,?)
-    """, (
-        bill["bill_id"], json.dumps(bill["items"]),
-        bill["total_amount"], bill["payment_mode"], bill["source"],
-    ))
-
-    # ── SRE flags log ────────────────────────────────────────────────────
-    for f in sre_flags:
-        resolution = f.get("resolution", "pending")
-        if float(f.get("confidence", 0)) >= 0.8 and resolution == "pending":
-            resolution = "auto_accepted"
-            
-        conn.execute("""
-            INSERT INTO sre_flags_log
-                (bill_id, flag_type, severity, field, expected_val, actual_val,
-                 message, confidence, resolution)
-            VALUES (?,?,?,?,?,?,?,?,?)
-        """, (
-            bill["bill_id"], f.get("flag_type"), f.get("severity", "info"),
-            f.get("field"), str(f.get("expected")), str(f.get("actual")),
-            f.get("message"), f.get("confidence", 0), resolution,
-        ))
-
     # ── Inventory update ─────────────────────────────────────────────────
-    # Inventory intent driven by bill_type when provided.
-    # PURCHASE_BILL -> restock (ADD), SALE_BILL -> sale (REMOVE)
+    # Inward bills confirmed via OCR are purchases/restock (ADD stock to inventory)
     bt = (bill.get("bill_type") or "").upper()
-    forced_action = "restock" if bt == "PURCHASE_BILL" else ("sale" if bt == "SALE_BILL" else None)
+    if bt == "SALE_BILL":
+        action = "sale"
+    else:
+        # Default for OCR purchase bills is always restock (+qty)
+        action = "restock"
 
+    conn = get_conn()
     stock_updates = []
     for item in bill["items"]:
         pid = item.get("product_id")
         qty = item.get("qty", 0) or 0
-        action = (
-            forced_action
-            or ("restock" if bill["source"] == "ocr" and bill.get("vendor_name") else "sale")
-        )
         delta = qty if action == "restock" else -qty
 
         # Auto-create product if missing in inventory
@@ -1176,6 +1193,48 @@ async def ocr_confirm(request: Request):
                 "new_qty": new_qty,
             })
 
+    # ── DB write ──────────────────────────────────────────────────────────
+    conn.execute("""
+        INSERT OR REPLACE INTO confirmed_bills
+            (bill_id, source, vendor_name, invoice_no, invoice_date, items,
+             subtotal, tax, total_amount, payment_mode, confirmation_status,
+             raw_data, sre_flags, created_at, confirmed_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        bill["bill_id"], bill["source"], bill.get("vendor_name"),
+        bill.get("invoice_no"), bill.get("invoice_date"),
+        json.dumps(bill["items"]), bill["subtotal"], bill["tax"],
+        bill["total_amount"], bill["payment_mode"], "confirmed",
+        json.dumps(bill.get("raw_data")), json.dumps(sre_flags),
+        bill["created_at"], bill["confirmed_at"],
+    ))
+
+    # Also write to legacy completed_bills for backward compat
+    conn.execute("""
+        INSERT OR IGNORE INTO completed_bills (bill_no, items, total_amount, payment_mode, source)
+        VALUES (?,?,?,?,?)
+    """, (
+        bill["bill_id"], json.dumps(bill["items"]),
+        bill["total_amount"], bill["payment_mode"], bill["source"],
+    ))
+
+    # ── SRE flags log ────────────────────────────────────────────────────
+    for f in sre_flags:
+        resolution = f.get("resolution", "pending")
+        if float(f.get("confidence", 0)) >= 0.8 and resolution == "pending":
+            resolution = "auto_accepted"
+            
+        conn.execute("""
+            INSERT INTO sre_flags_log
+                (bill_id, flag_type, severity, field, expected_val, actual_val,
+                 message, confidence, resolution)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (
+            bill["bill_id"], f.get("flag_type"), f.get("severity", "info"),
+            f.get("field"), str(f.get("expected")), str(f.get("actual")),
+            f.get("message"), f.get("confidence", 0), resolution,
+        ))
+
     conn.commit()
     conn.close()
 
@@ -1187,28 +1246,8 @@ async def ocr_confirm(request: Request):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 4. VOICE  →  transcript parse  →  item extraction  →  pending bill
+# 4. VOICE RECOGNITION & SPEECH MATCHING
 # ═════════════════════════════════════════════════════════════════════════════
-
-def _products_with_aliases(conn):
-    rows = conn.execute(
-        """
-        SELECT p.id, p.name,
-               group_concat(pa.alias, '|||') AS alias_blob
-        FROM products p
-        LEFT JOIN product_aliases pa ON pa.product_id = p.id
-        WHERE p.is_active = 1
-        GROUP BY p.id
-        """
-    ).fetchall()
-    out = []
-    for row in rows:
-        d = dict(row)
-        blob = d.pop("alias_blob", "") or ""
-        d["aliases"] = [a for a in blob.split("|||") if a] if blob else []
-        out.append(d)
-    return out
-
 
 @app.post("/api/voice/transcribe")
 async def voice_transcribe(request: Request):
@@ -1218,66 +1257,117 @@ async def voice_transcribe(request: Request):
         return _err("Transcript is required")
 
     conn = get_conn()
-    db_products = [dict(r) for r in conn.execute(
-        "SELECT id, name, selling_price, emoji FROM products WHERE is_active=1"
-    ).fetchall()]
+    rows = conn.execute("""
+        SELECT p.id, p.name, p.selling_price, p.emoji,
+               GROUP_CONCAT(pa.alias, '|||') AS aliases
+        FROM products p
+        LEFT JOIN product_aliases pa ON pa.product_id = p.id
+        WHERE p.is_active = 1
+        GROUP BY p.id
+    """).fetchall()
     conn.close()
+
+    db_products = []
+    for r in rows:
+        d = dict(r)
+        alias_list = [a.lower().strip() for a in (d.pop("aliases") or "").split("|||") if a.strip()]
+        d["aliases"] = alias_list
+        db_products.append(d)
 
     quantity_words = {
         'ek':1, 'do':2, 'teen':3, 'char':4, 'paanch':5, 'chhe':6, 'saat':7, 'aath':8, 'nau':9, 'das':10,
         'one':1, 'two':2, 'three':3, 'four':4, 'five':5, 'six':6, 'seven':7, 'eight':8, 'nine':9, 'ten':10,
         'half':0.5, 'dhai':2.5, 'couple':2
     }
-    
-    from helpers import fuzzy_match, normalize
-    
-    # normalize transcript so hindi characters match properly with quantity mapping
+    from helpers import normalize
+    import difflib
+
     transcript = normalize(transcript)
     words = transcript.split()
-    seen_ids = set()
-    seen_aliases = set()
-    total_amount = 0
-    structured_items = []
-    
-    product_matches = []
-    
-    import difflib
-    
+    STOP_WORDS = {"and", "aur", "or", "bhi", "with", "ka", "ki", "ke", "ko", "de", "do", "dena", "packet", "piece", "pcs", "bhai", "waala", "chahiye"}
+
+    candidates = []
+
     for p in db_products:
-        matched, conf = fuzzy_match(transcript, [p], min_confidence=0.55)
-        if matched:
-            product_matches.append((p, conf, matched.get('matched_alias', matched['name']).lower()))
-            
-    product_matches.sort(key=lambda x: x[1], reverse=True)
-            
-    for p, conf, alias_used in product_matches:
-        if p['id'] not in seen_ids and alias_used not in seen_aliases:
-            seen_ids.add(p['id'])
-            seen_aliases.add(alias_used)
-            qty = 1
-            match_index = -1
-            alias_first = alias_used.split()[0] if alias_used.split() else ''
-            
-            best_idx = -1
-            best_sim = 0
-            for i, w in enumerate(words):
-                sim = difflib.SequenceMatcher(None, w, alias_first).ratio()
-                if sim > best_sim:
-                    best_sim = sim
-                    best_idx = i
-            
-            if best_sim >= 0.75:
-                match_index = best_idx
-            if match_index > 0 and words[match_index-1] in quantity_words:
-                qty = quantity_words[words[match_index-1]]
-            elif match_index > 0 and words[match_index-1].isdigit():
-                qty = int(words[match_index-1])
-            elif match_index < len(words)-1 and words[match_index+1] in quantity_words:
-                qty = quantity_words[words[match_index+1]]
-            elif match_index < len(words)-1 and words[match_index+1].isdigit():
-                qty = int(words[match_index+1])
+        p_name = p['name'].lower()
+        all_variants = [p_name] + p.get("aliases", [])
+        
+        best_score = 0
+        best_span = (0, 0)
+        
+        for i in range(len(words)):
+            for j in range(i+1, min(len(words)+1, i+4)):
+                sub = ' '.join(words[i:j])
+                if sub in STOP_WORDS or sub in quantity_words:
+                    continue
+                if len(sub) < 3:
+                    continue
                 
+                score = 0.0
+                for v in all_variants:
+                    if sub == v:
+                        score = max(score, 1.0)
+                    elif v.startswith(sub) or sub.startswith(v):
+                        score = max(score, 0.95)
+                    else:
+                        v_words = [w for w in v.split() if w not in STOP_WORDS and len(w) >= 3]
+                        if any(vw == sub for vw in v_words):
+                            score = max(score, 0.92)
+                        elif v_words:
+                            sim = max([difflib.SequenceMatcher(None, sub, vw).ratio() for vw in v_words] or [0])
+                            if sim >= 0.70:
+                                score = max(score, sim)
+                
+                if score > best_score and score >= 0.65:
+                    best_score = score
+                    best_span = (i, j)
+                    
+        if best_score >= 0.65:
+            candidates.append({
+                'product': p,
+                'score': best_score,
+                'span': best_span
+            })
+            
+    # Sort candidates by match quality (highest score first, then longer span)
+    candidates.sort(key=lambda x: (x['score'], x['span'][1] - x['span'][0]), reverse=True)
+    
+    claimed_words = set()
+    structured_items = []
+    total_amount = 0.0
+    
+    for c in candidates:
+        span_words = set(range(c['span'][0], c['span'][1]))
+        if not (span_words & claimed_words):
+            start_idx, end_idx = c['span']
+            qty = 1
+            qty_word_idx = None
+            
+            if start_idx > 0:
+                prev_w = words[start_idx - 1]
+                if prev_w in quantity_words:
+                    qty = quantity_words[prev_w]
+                    qty_word_idx = start_idx - 1
+                elif prev_w.isdigit():
+                    qty = int(prev_w)
+                    qty_word_idx = start_idx - 1
+            elif end_idx < len(words):
+                next_w = words[end_idx]
+                if next_w in quantity_words:
+                    qty = quantity_words[next_w]
+                    qty_word_idx = end_idx
+                elif next_w.isdigit():
+                    qty = int(next_w)
+                    qty_word_idx = end_idx
+                    
+            claimed_words.update(span_words)
+            if qty_word_idx is not None:
+                claimed_words.add(qty_word_idx)
+                
+            p = c['product']
             price = float(p.get('selling_price', 0))
+            amt = price * qty
+            
             structured_items.append({
                 "id": p['id'],
                 "name": p['name'],
@@ -1286,13 +1376,13 @@ async def voice_transcribe(request: Request):
                 "qty": qty,
                 "unit": "pcs",
                 "price": price,
-                "amount": price * qty,
-                "confidence": conf,
-                "match_method": "voice_fuzzy"
+                "amount": amt,
+                "confidence": c['score'],
+                "emoji": p.get('emoji', '📦'),
+                "match_method": "voice_single_best"
             })
-            total_amount += (price * qty)
+            total_amount += amt
 
-    # Note: Returning nested in data to match React api.js formatting
     return JSONResponse({
         'success': True,
         'data': {
@@ -1412,27 +1502,77 @@ async def voice_confirm(request: Request):
 # ═════════════════════════════════════════════════════════════════════════════
 
 from price_resolver import PriceResolver
+from pattern_engine import PatternRecognitionEngine
+
 pr_resolver = PriceResolver()
+pattern_engine = PatternRecognitionEngine()
 
 @app.post("/api/calculator/resolve-price")
 async def resolve_price(request: Request):
     body = await request.json()
     price = int(body.get("price", 0))
-    hour = int(body.get("hour", 0))
-    day = int(body.get("day", 0))
-    
-    items = pr_resolver.get_items_for_price(price)
-    if not items:
+    hour = body.get("hour")
+    day = body.get("day")
+    cart_item_ids = body.get("cart_item_ids", [])
+    asr_transcript = body.get("asr_transcript", "")
+
+    # Multi-dimensional pattern prediction
+    pred = pattern_engine.predict_item(
+        price=price,
+        hour=hour,
+        day=day,
+        active_cart_item_ids=cart_item_ids,
+        asr_transcript=asr_transcript
+    )
+
+    if pred.get("status") == "not_found":
         return _ok({"status": "not_found", "items": []})
-        
-    if len(items) == 1:
-        return _ok({"status": "unique", "item": items[0], "confidence": 1.0})
-        
-    best = pr_resolver.get_best_guess(price, hour, day)
-    if best:
-        return _ok({"status": "auto", "item": best, "confidence": best['confidence'], "alternatives": items})
-        
-    return _ok({"status": "ambiguous", "items": items, "confidence": 0})
+
+    best = pred.get("best_match")
+    candidates = pred.get("candidates", [])
+
+    if len(candidates) == 1:
+        return _ok({
+            "status": "unique",
+            "item": candidates[0],
+            "confidence": 1.0,
+            "reason": candidates[0].get("reason", "Unique price match")
+        })
+
+    if pred.get("status") == "auto" and best:
+        return _ok({
+            "status": "auto",
+            "item": best,
+            "confidence": best.get("confidence", 0.8),
+            "reason": best.get("reason", "Pattern prediction"),
+            "alternatives": candidates
+        })
+
+    return _ok({
+        "status": "ambiguous",
+        "items": candidates,
+        "best_guess": best,
+        "confidence": best.get("confidence", 0) if best else 0
+    })
+
+@app.post("/api/calculator/predict-item")
+async def predict_item_api(request: Request):
+    """Real-time parallel prediction endpoint for live speech + keypad inputs."""
+    body = await request.json()
+    price = body.get("price", 0)
+    hour = body.get("hour")
+    day = body.get("day")
+    cart_item_ids = body.get("cart_item_ids", [])
+    asr_transcript = body.get("asr_transcript", "")
+
+    pred = pattern_engine.predict_item(
+        price=price,
+        hour=hour,
+        day=day,
+        active_cart_item_ids=cart_item_ids,
+        asr_transcript=asr_transcript
+    )
+    return _ok(pred)
 
 @app.post("/api/calculator/select-item")
 async def select_item(request: Request):
@@ -1441,6 +1581,11 @@ async def select_item(request: Request):
         body["price"], body["item_id"], body["item_name"],
         body["hour"], body["day"]
     )
+    pattern_engine.record_transaction_patterns([{
+        "item_id": body["item_id"],
+        "item_name": body["item_name"],
+        "price": body["price"]
+    }], hour=body.get("hour"), day=body.get("day"))
     return _ok({"status": "recorded"})
 
 @app.post("/api/calculator/submit-session")
@@ -1509,6 +1654,12 @@ async def submit_session(request: Request):
 
     conn.commit()
     conn.close()
+
+    # Automatically learn transaction patterns into the Pattern Recognition Engine
+    try:
+        pattern_engine.record_transaction_patterns(entries)
+    except Exception as ex:
+        print(f"Pattern learning error: {ex}")
     
     # 2. Run SRE checks on session (after DB write so session_id is available)
     bill_for_sre = {
@@ -2664,6 +2815,591 @@ async def legacy_asr(request: Request):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# 9. PARALLEL TRANSACTION BUFFER  — ASR + Calculator + Inventory
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Architecture:
+#   /api/txn-buffer/start        → create a new buffer (in-memory + staged_transactions row)
+#   /api/txn-buffer/asr-update   → append ASR segment while shopkeeper talks
+#   /api/txn-buffer/amount-update→ sync calculator operands into buffer
+#   /api/txn-buffer/finalize     → run Confidence Engine, return decision
+#   /api/txn-buffer/commit       → persist high/medium to permanent DB
+#   /api/txn-buffer/flag         → persist low-confidence to night_reconciliation
+#   /api/txn-buffer/discard      → cancel a buffer (C button pressed)
+#
+# The in-memory dict (_txn_buffers) is the fast path.
+# staged_transactions is the durable backup (survives restarts via /finalize).
+# ─────────────────────────────────────────────────────────────────────────────
+
+from confidence_engine import ConfidenceEngine, confidence_result_to_dict
+
+_confidence_engine = ConfidenceEngine()
+_txn_buffers: dict = {}   # txn_id → { asr_segments, calc_amounts, created_at, ... }
+
+# Max age for an in-memory buffer (seconds) before it's considered stale
+_BUFFER_MAX_AGE_S = 3600   # 1 hour
+
+
+def _clean_stale_buffers():
+    """Evict in-memory buffers older than _BUFFER_MAX_AGE_S."""
+    import time
+    now = time.time()
+    stale = [k for k, v in _txn_buffers.items() if now - v.get("_ts", now) > _BUFFER_MAX_AGE_S]
+    for k in stale:
+        del _txn_buffers[k]
+
+
+@app.post("/api/txn-buffer/start")
+async def txn_buffer_start(request: Request):
+    """
+    Called when a new calculator session begins (first key press).
+    Creates an in-memory buffer and a staged_transactions row.
+    """
+    body = await request.json()
+    txn_id = body.get("txn_id") or f"TXN-{uuid.uuid4().hex[:10].upper()}"
+
+    import time
+    _clean_stale_buffers()
+    _txn_buffers[txn_id] = {
+        "txn_id": txn_id,
+        "asr_segments": [],
+        "calc_amounts": [],
+        "_ts": time.time(),
+    }
+
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO staged_transactions (txn_id, status) VALUES (?, 'pending')",
+            (txn_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return _ok({"txn_id": txn_id, "status": "started"})
+
+
+@app.post("/api/txn-buffer/asr-update")
+async def txn_buffer_asr_update(request: Request):
+    """
+    Called each time the passive ASR produces a final speech segment.
+    Appends the segment to the buffer — no DB write (pure in-memory).
+    """
+    body = await request.json()
+    txn_id = body.get("txn_id")
+    segment = (body.get("segment") or "").strip()
+    if not txn_id or not segment:
+        return _ok({"status": "noop"})
+
+    import time
+    buf = _txn_buffers.get(txn_id)
+    if buf is None:
+        # Recreate buffer if server restarted
+        _txn_buffers[txn_id] = {"txn_id": txn_id, "asr_segments": [], "calc_amounts": [], "_ts": time.time()}
+        buf = _txn_buffers[txn_id]
+
+    buf["asr_segments"].append({"text": segment, "ts": time.time()})
+    buf["_ts"] = time.time()
+    # Keep rolling window — drop segments older than 5 minutes
+    cutoff = time.time() - 300
+    buf["asr_segments"] = [s for s in buf["asr_segments"] if s["ts"] > cutoff]
+
+    return _ok({"txn_id": txn_id, "segment_count": len(buf["asr_segments"])})
+
+
+@app.post("/api/txn-buffer/amount-update")
+async def txn_buffer_amount_update(request: Request):
+    """
+    Called each time a calculator operand is finalized.
+    Syncs the current operand list into the buffer (replaces, doesn't append).
+    """
+    body = await request.json()
+    txn_id = body.get("txn_id")
+    amounts = body.get("amounts", [])   # full list every time
+    if not txn_id:
+        return _ok({"status": "noop"})
+
+    import time
+    buf = _txn_buffers.get(txn_id)
+    if buf is None:
+        _txn_buffers[txn_id] = {"txn_id": txn_id, "asr_segments": [], "calc_amounts": [], "_ts": time.time()}
+        buf = _txn_buffers[txn_id]
+
+    buf["calc_amounts"] = [{"value": float(a.get("value", a) if isinstance(a, dict) else a), "entry_id": a.get("entry_id") if isinstance(a, dict) else None} for a in amounts]
+    buf["_ts"] = time.time()
+
+    return _ok({"txn_id": txn_id, "amount_count": len(buf["calc_amounts"])})
+
+
+@app.post("/api/txn-buffer/finalize")
+async def txn_buffer_finalize(request: Request):
+    """
+    Called when shopkeeper presses =.
+    Runs the Confidence Engine across all three signals.
+    Returns decision (high/medium/low) + matched items + score.
+    Does NOT commit to permanent DB yet.
+    """
+    body = await request.json()
+    txn_id = body.get("txn_id")
+    if not txn_id:
+        return _err("txn_id required")
+
+    import time
+    buf = _txn_buffers.get(txn_id, {})
+
+    # Merge buffer state with any frontend-provided overrides
+    asr_segments = buf.get("asr_segments", [])
+    calc_amounts_raw = body.get("amounts") or [a["value"] for a in buf.get("calc_amounts", [])]
+    calc_amounts = [float(a) for a in calc_amounts_raw if a]
+
+    full_transcript = " ".join(s["text"] for s in asr_segments)
+
+    # Fetch inventory snapshot
+    conn = get_conn()
+    try:
+        inv_rows = conn.execute("""
+            SELECT p.id, p.name, p.selling_price, p.current_qty, p.emoji,
+                   GROUP_CONCAT(pa.alias_price, ',') AS alias_prices
+            FROM products p
+            LEFT JOIN price_aliases pa ON pa.item_id = p.id
+            WHERE p.is_active = 1
+            GROUP BY p.id
+        """).fetchall()
+
+        # Load price patterns
+        pattern_rows = conn.execute("""
+            SELECT price, item_id, item_name, SUM(selection_count) AS selection_count
+            FROM price_item_patterns
+            GROUP BY price, item_id
+            ORDER BY selection_count DESC
+        """).fetchall()
+    finally:
+        conn.close()
+
+    inventory = []
+    for r in inv_rows:
+        d = dict(r)
+        aliases = [a.strip() for a in (d.pop("alias_prices", None) or "").split(",") if a.strip()]
+        d["aliases"] = aliases
+        inventory.append(d)
+
+    patterns = [dict(r) for r in pattern_rows]
+
+    # Run confidence engine
+    result = _confidence_engine.score(
+        calculator_amounts=calc_amounts,
+        asr_transcript=full_transcript,
+        inventory_snapshot=inventory,
+        price_patterns=patterns,
+    )
+    result_dict = confidence_result_to_dict(result)
+
+    # ── Structured Pipeline Logging ──
+    logger.info(f"[CALCULATOR] amount=₹{sum(calc_amounts):.2f} operands={calc_amounts}")
+    logger.info(f"[ASR] text=\"{full_transcript}\"")
+    for it in result.matched_items:
+        logger.info(f"[INVENTORY] item={it.item_name} price=₹{it.price} qty={it.qty} in_stock={it.in_stock}")
+    logger.info(f"[VALIDATION] calculated=₹{sum(it.price * it.qty for it in result.matched_items):.2f} confidence={result.score:.2f}")
+    logger.info(f"[DECISION] {result.decision.upper()}")
+    if result.decision == "low":
+        logger.info(f"[REASON] UNCERTAIN_OR_AMOUNT_MISMATCH -> Flagged for Night Reconciliation")
+
+    # Persist finalized state to staged_transactions
+    conn = get_conn()
+    try:
+        conn.execute("""
+            INSERT OR REPLACE INTO staged_transactions
+                (txn_id, asr_buffer, calc_amounts, matched_items, confidence_score, decision, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'finalized')
+        """, (
+            txn_id,
+            json.dumps(asr_segments),
+            json.dumps(calc_amounts),
+            json.dumps(result_dict["matched_items"]),
+            result.score,
+            result.decision,
+        ))
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Update in-memory buffer with finalized result
+    if txn_id in _txn_buffers:
+        _txn_buffers[txn_id]["finalized_result"] = result_dict
+        _txn_buffers[txn_id]["_ts"] = time.time()
+
+    return _ok({
+        "txn_id": txn_id,
+        "confidence": result_dict,
+        "asr_transcript": full_transcript,
+        "amount_count": len(calc_amounts),
+    })
+
+
+@app.post("/api/txn-buffer/commit")
+async def txn_buffer_commit(request: Request):
+    """
+    Called after finalize when decision is high or medium.
+    Writes the matched items to calculator_sessions + inventory_deduction_log.
+    Marks staged_transactions.status = 'committed'.
+    Clears the in-memory buffer.
+    Includes idempotency protection against duplicate commits.
+    """
+    body = await request.json()
+    txn_id = body.get("txn_id")
+    entries = body.get("entries", [])       # final resolved entries from frontend
+    expression = body.get("expression", "")
+    result_total = float(body.get("result", 0))
+    spoken_context = body.get("spoken_context", {})
+    confidence_score = float(body.get("confidence_score", 0))
+
+    if not txn_id:
+        return _err("txn_id required")
+
+    conn = get_conn()
+    try:
+        # ── Idempotency Check: Prevent duplicate commits ──
+        existing = conn.execute("SELECT status FROM staged_transactions WHERE txn_id=?", (txn_id,)).fetchone()
+        if existing and existing["status"] == "committed":
+            logger.info(f"[DUPLICATE_PROTECTION] txn_id={txn_id} already committed. Skipping duplicate deduction.")
+            return _ok({
+                "txn_id": txn_id,
+                "status": "already_committed",
+                "message": "Transaction already committed safely without duplicate stock deduction."
+            })
+
+        now_dt = datetime.now()
+        spoken_transcript = spoken_context.get("raw_transcript", "")
+
+        conn.execute("""
+            INSERT INTO calculator_sessions
+                (entries_json, expression, result, session_date, session_time, status, spoken_transcript)
+            VALUES (?, ?, ?, ?, ?, 'confirmed', ?)
+        """, (
+            json.dumps(entries), expression, result_total,
+            now_dt.strftime("%Y-%m-%d"), now_dt.strftime("%H:%M:%S"),
+            spoken_transcript
+        ))
+        session_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        inventory_updates = []
+        unresolved_indices = []
+
+        for idx, e in enumerate(entries):
+            pid = e.get("item_id")
+            qty = int(e.get("qty", 1))
+            item_name = (e.get("item_name") or e.get("name") or "").strip() or "Unknown Item"
+            price = float(e.get("price", 0))
+
+            # Auto-create product if named but not in inventory
+            if not pid and item_name and item_name not in ("Unknown Item", ""):
+                slug = ''.join(c for c in item_name.upper() if c.isalnum())[:6]
+                sku = f"KS-{slug}-{uuid.uuid4().hex[:3].upper()}"
+                conn.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", ("Other",))
+                cat_row = conn.execute("SELECT id FROM categories WHERE name=?", ("Other",)).fetchone()
+                cat_id = cat_row["id"] if cat_row else None
+                conn.execute("""
+                    INSERT INTO products (name, category_id, sku, purchase_price, selling_price,
+                                          mrp, current_qty, min_stock, emoji)
+                    VALUES (?,?,?,?,?,?,0,5,'📦')
+                """, (item_name, cat_id, sku, price, price, price))
+                pid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+            if pid:
+                conn.execute(
+                    "UPDATE products SET current_qty = current_qty - ?, updated_at = datetime('now') WHERE id=?",
+                    (qty, pid)
+                )
+                conn.execute("""
+                    INSERT INTO inventory_deduction_log
+                        (session_id, item_id, item_name, qty_deducted, price_at_time, alias_used)
+                    VALUES (?,?,?,?,?,?)
+                """, (session_id, pid, item_name, qty, price, e.get("alias_used", False)))
+                conn.execute("""
+                    INSERT INTO stock_logs
+                        (transaction_id, product_id, product_name, qty_change, action_type, source, reason)
+                    VALUES (?,?,?,?,'sale','calculator_parallel',?)
+                """, (f"CALC-{session_id}-{pid}", pid, item_name, -qty, f"Session {session_id} | confidence={confidence_score:.2f}"))
+
+                inventory_updates.append({
+                    "item_id": pid, "item_name": item_name,
+                    "qty_deducted": qty, "price": price,
+                })
+            else:
+                unresolved_indices.append(idx)
+
+        conn.execute(
+            "UPDATE calculator_sessions SET unresolved_operands=? WHERE id=?",
+            (json.dumps(unresolved_indices), session_id)
+        )
+
+        # Mark staged_transaction committed
+        conn.execute(
+            "UPDATE staged_transactions SET status='committed', committed_at=datetime('now') WHERE txn_id=?",
+            (txn_id,)
+        )
+        conn.commit()
+
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return _err(f"Commit failed: {exc}", 500)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    # Clear in-memory buffer only after successful DB commit
+    _txn_buffers.pop(txn_id, None)
+
+    # Automatically learn transaction patterns into the Pattern Recognition Engine
+    try:
+        pattern_engine.record_transaction_patterns(entries)
+    except Exception as ex:
+        print(f"Pattern learning error on buffer commit: {ex}")
+
+    return _ok({
+        "status": "committed",
+        "session_id": session_id,
+        "inventory_updates": inventory_updates,
+        "unresolved_count": len(unresolved_indices),
+    })
+
+
+@app.post("/api/txn-buffer/flag")
+async def txn_buffer_flag(request: Request):
+    """
+    Called when confidence is low (< 0.50).
+    Saves full snapshot to night_reconciliation.
+    Does NOT deduct inventory — preserves accuracy.
+    Marks staged_transactions.status = 'flagged'.
+    Clears the in-memory buffer.
+    """
+    body = await request.json()
+    txn_id = body.get("txn_id")
+    reason = body.get("reason", "low_confidence")
+    confidence_score = float(body.get("confidence_score", 0))
+    payload = body.get("payload", {})
+
+    if not txn_id:
+        return _err("txn_id required")
+
+    buf = _txn_buffers.get(txn_id, {})
+    full_payload = {
+        "asr_segments": buf.get("asr_segments", []),
+        "calc_amounts": buf.get("calc_amounts", []),
+        "finalized_result": buf.get("finalized_result"),
+        **payload,
+    }
+
+    conn = get_conn()
+    try:
+        conn.execute("""
+            INSERT INTO night_reconciliation
+                (txn_id, reason, confidence_score, payload_json, status)
+            VALUES (?,?,?,?,'pending')
+        """, (txn_id, reason, confidence_score, json.dumps(full_payload)))
+
+        conn.execute(
+            "UPDATE staged_transactions SET status='flagged', flagged_at=datetime('now') WHERE txn_id=?",
+            (txn_id,)
+        )
+        recon_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Clear buffer — nothing was committed to inventory so no harm
+    _txn_buffers.pop(txn_id, None)
+
+    return _ok({"status": "flagged", "txn_id": txn_id, "reconciliation_id": recon_id, "reason": reason})
+
+
+@app.post("/api/txn-buffer/discard")
+async def txn_buffer_discard(request: Request):
+    """Called when shopkeeper presses Clear (C). Cancels the buffer without any DB side-effects."""
+    body = await request.json()
+    txn_id = body.get("txn_id")
+    if not txn_id:
+        return _ok({"status": "noop"})
+
+    _txn_buffers.pop(txn_id, None)
+
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE staged_transactions SET status='cancelled' WHERE txn_id=? AND status='pending'",
+            (txn_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return _ok({"status": "discarded", "txn_id": txn_id})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Night Reconciliation Review endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/night-reconciliation")
+async def get_night_reconciliation(status: str = "pending", limit: int = 50, offset: int = 0):
+    """Return night reconciliation queue entries."""
+    status = (status or "pending").strip().lower()
+    limit = max(1, min(int(limit or 50), 200))
+    conn = get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT id, txn_id, session_id, reason, confidence_score,
+                   payload_json, status, notes, reviewed_at, created_at
+            FROM night_reconciliation
+            WHERE status = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (status, limit, offset)).fetchall()
+
+        total = conn.execute(
+            "SELECT COUNT(*) FROM night_reconciliation WHERE status=?", (status,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["payload"] = json.loads(d.pop("payload_json") or "{}")
+        except Exception:
+            d["payload"] = {}
+        out.append(d)
+
+    return _ok({"items": out, "total": total, "status_filter": status})
+
+
+@app.post("/api/night-reconciliation/{recon_id}/resolve")
+async def resolve_night_reconciliation(recon_id: int, request: Request):
+    """
+    Mark a reconciliation item as resolved or dismissed.
+    Optionally commit inventory deductions for the items the shopkeeper confirms.
+    """
+    body = await request.json()
+    resolution = (body.get("resolution") or "resolved").strip().lower()
+    if resolution not in ("resolved", "dismissed"):
+        return _err("resolution must be resolved|dismissed")
+
+    confirmed_entries = body.get("confirmed_entries", [])   # items shopkeeper confirms
+    notes = (body.get("notes") or "").strip()
+
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM night_reconciliation WHERE id=?", (recon_id,)
+        ).fetchone()
+        if not row:
+            return _err("Record not found", 404)
+
+        inventory_updates = []
+        if resolution == "resolved" and confirmed_entries:
+            now_dt = datetime.now()
+            conn.execute("""
+                INSERT INTO calculator_sessions
+                    (entries_json, expression, result, session_date, session_time, status, spoken_transcript)
+                VALUES (?, ?, ?, ?, ?, 'confirmed', ?)
+            """, (
+                json.dumps(confirmed_entries),
+                " + ".join(str(e.get("price", 0)) for e in confirmed_entries),
+                sum(e.get("price", 0) * e.get("qty", 1) for e in confirmed_entries),
+                now_dt.strftime("%Y-%m-%d"),
+                now_dt.strftime("%H:%M:%S"),
+                f"Night reconciliation #{recon_id}",
+            ))
+            session_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                "UPDATE night_reconciliation SET session_id=? WHERE id=?",
+                (session_id, recon_id)
+            )
+
+            for e in confirmed_entries:
+                pid = e.get("item_id")
+                qty = int(e.get("qty", 1))
+                item_name = (e.get("item_name") or "").strip()
+                price = float(e.get("price", 0))
+                if pid and qty > 0:
+                    conn.execute(
+                        "UPDATE products SET current_qty = current_qty - ?, updated_at = datetime('now') WHERE id=?",
+                        (qty, pid)
+                    )
+                    conn.execute("""
+                        INSERT INTO stock_logs
+                            (transaction_id, product_id, product_name, qty_change, action_type, source, reason)
+                        VALUES (?,?,?,?,'sale','night_reconciliation',?)
+                    """, (
+                        f"RECON-{recon_id}-{pid}", pid, item_name, -qty,
+                        f"Night reconciliation #{recon_id}"
+                    ))
+                    inventory_updates.append({"item_id": pid, "item_name": item_name, "qty_deducted": qty})
+
+        conn.execute("""
+            UPDATE night_reconciliation
+            SET status=?, notes=?, reviewed_at=datetime('now')
+            WHERE id=?
+        """, (resolution, notes, recon_id))
+
+        conn.commit()
+        if resolution == "resolved" and confirmed_entries:
+            try:
+                pattern_engine.record_transaction_patterns(confirmed_entries)
+            except Exception as ex:
+                print(f"Pattern learning error on recon resolve: {ex}")
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        return _err(str(exc), 500)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return _ok({
+        "status": resolution,
+        "id": recon_id,
+        "inventory_updates": inventory_updates,
+    })
+
+
+@app.get("/api/night-reconciliation/stats")
+async def night_reconciliation_stats():
+    """Quick stats for the reconciliation badge/dashboard."""
+    conn = get_conn()
+    try:
+        pending = conn.execute(
+            "SELECT COUNT(*) FROM night_reconciliation WHERE status='pending'"
+        ).fetchone()[0]
+        resolved_today = conn.execute(
+            "SELECT COUNT(*) FROM night_reconciliation WHERE status='resolved' AND date(reviewed_at)=date('now')"
+        ).fetchone()[0]
+        total_today = conn.execute(
+            "SELECT COUNT(*) FROM night_reconciliation WHERE date(created_at)=date('now')"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    return _ok({
+        "pending": pending,
+        "resolved_today": resolved_today,
+        "total_today": total_today,
+    })
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -2677,6 +3413,8 @@ if __name__ == "__main__":
 ║  Routes: /api/ocr/* /api/voice/* /api/sre/*          ║
 ║          /api/inventory/* /api/products/*             ║
 ║          /api/calculator/* /api/dashboard             ║
+║          /api/txn-buffer/* /api/night-reconciliation/*║
 ╚═══════════════════════════════════════════════════════╝
     """)
     uvicorn.run(app, host="0.0.0.0", port=port)
+

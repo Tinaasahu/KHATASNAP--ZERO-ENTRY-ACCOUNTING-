@@ -13,29 +13,34 @@ const fs      = require('fs');
 
 const PORT = parseInt(process.env.VOICE_SERVICE_PORT || '8002', 10);
 
-// ── Load the voice processor from the Express backend's services dir ────
-const GEMINI_PATH = path.join(
-  __dirname, '..', '..', 'khatasnap (5)', 'khatasnap (2)', 'khatasnap',
-  'backend', 'services', 'gemini.js'
-);
-const PRODUCTS_PATH = path.join(
-  __dirname, '..', '..', 'khatasnap (5)', 'khatasnap (2)', 'khatasnap',
-  'backend', 'data', 'products.json'
-);
+// ── Load the voice processor if present ────
+const candidatePaths = [
+  path.join(__dirname, 'gemini.js'),
+  path.join(__dirname, '..', 'gemini.js'),
+  path.join(__dirname, '..', 'backend', 'services', 'gemini.js')
+];
+
+let GEMINI_PATH = candidatePaths.find(p => fs.existsSync(p));
+const PRODUCTS_PATH = path.join(__dirname, '..', 'data', 'products.json');
 
 let processTransaction, detectMismatch;
-try {
-  const gemini = require(GEMINI_PATH);
-  processTransaction = gemini.processTransaction;
-  detectMismatch     = gemini.detectMismatch;
-  console.log('✅ Voice processor loaded from:', GEMINI_PATH);
-} catch (e) {
-  console.error('❌ Failed to load gemini.js:', e.message);
-  // Provide a stub so the service still starts
+if (GEMINI_PATH) {
+  try {
+    const gemini = require(GEMINI_PATH);
+    processTransaction = gemini.processTransaction;
+    detectMismatch     = gemini.detectMismatch;
+    console.log('✅ Voice processor loaded from:', GEMINI_PATH);
+  } catch (e) {
+    console.warn('⚠️ Voice processor module load warning:', e.message);
+  }
+}
+
+if (!processTransaction) {
   processTransaction = async (transcript) => ({
-    success: false, error: 'Voice processor not available', data: null
+    success: false, error: 'Voice processor module gemini.js not found', data: null
   });
   detectMismatch = async () => ({ mismatches: [], suggestions: [] });
+  console.log('ℹ️ Using default fallback stub for Voice processor');
 }
 
 function loadProducts() {

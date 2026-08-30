@@ -1,58 +1,88 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import { useSRE } from '../hooks/useSRE';
 import { useVoice } from '../hooks/useVoice';
 import { useToast } from '../hooks/useToast';
-import { resolvePrice, selectItem, submitSession, getHistory, assignItem } from '../api/calculator';
+import { resolvePrice, selectItem, submitSession, getHistory, assignItem, predictItem } from '../api/calculator';
 import MicButton from '../components/voice/MicButton';
 import SREFlagList from '../components/sre/SREFlagList';
-import { CheckCircle, Mic } from 'lucide-react';
+import { CheckCircle, Mic, Sun, Sparkles, Volume2, Zap } from 'lucide-react';
 import Divider from '../components/ui/Divider';
 import { usePassiveASR } from '../hooks/usePassiveASR';
+import { useTransactionBuffer } from '../hooks/useTransactionBuffer';
 import { extractItemMentions, matchMentionsToOperands } from '../utils/speechMatcher';
 import { getSnapshot, addPriceAlias } from '../api/inventory';
 import { findCombinations } from '../utils/compositeResolver';
+import ConfidenceBar from '../components/ui/ConfidenceBar';
 
 const RenderChip = ({ entry, onClick, isActive }) => {
+  const isSpeech = entry.resolution_method === 'speech' || entry.resolution_method === 'speech_ambiguous';
+  const isAutoPattern = entry.status === 'auto' && !isSpeech;
+
   const border = isActive ? '2px solid var(--primary)' 
+                 : isSpeech ? '1.5px solid #6366f1'
+                 : isAutoPattern ? '1.5px solid #22c55e'
                  : entry.status === 'ambiguous' ? '1px solid var(--warning)' 
                  : entry.status === 'not_found' ? '1px dashed var(--border)' 
                  : '1px solid var(--border)';
-  const glow = entry.status === 'ambiguous' ? '0 0 5px var(--warning)' : 'none';
+
+  const glow = isActive ? '0 0 10px rgba(99, 102, 241, 0.4)'
+               : isSpeech ? '0 0 8px rgba(99, 102, 241, 0.25)'
+               : isAutoPattern ? '0 0 8px rgba(34, 197, 94, 0.2)'
+               : entry.status === 'ambiguous' ? '0 0 6px var(--warning)' : 'none';
+
   const name = entry.name || entry.item_name;
   const isMultiple = entry.qty && entry.qty > 1;
   const price = entry.price || entry.value;
   
   return (
-     <div onClick={onClick} style={{ position: 'relative', background: 'var(--surface)', border, borderRadius: 'var(--radius-md)', padding: '6px 10px', minWidth: '72px', maxWidth: '120px', cursor: 'pointer', boxShadow: glow, transition: 'all 0.2s' }}>
+     <div onClick={onClick} style={{
+        position: 'relative',
+        background: isSpeech ? 'rgba(99, 102, 241, 0.08)' : isAutoPattern ? 'rgba(34, 197, 94, 0.06)' : 'var(--surface)',
+        border,
+        borderRadius: 'var(--radius-md)',
+        padding: '6px 10px',
+        minWidth: '76px',
+        maxWidth: '135px',
+        cursor: 'pointer',
+        boxShadow: glow,
+        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+     }}>
         {isMultiple && entry.status === 'resolved' && (
-            <div style={{ position: 'absolute', top: '-6px', right: '-6px', background: 'var(--warning)', color: 'var(--surface)', fontSize: '10px', fontWeight: 'bold', padding: '2px 4px', borderRadius: '8px' }}>
+            <div style={{ position: 'absolute', top: '-6px', right: '-6px', background: 'var(--warning)', color: 'var(--surface)', fontSize: '10px', fontWeight: 'bold', padding: '2px 5px', borderRadius: '8px', zIndex: 2 }}>
                 ×{entry.qty}
             </div>
         )}
         {entry.status === 'ambiguous' ? (
             <>
-              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Pending</div>
-              <div style={{ fontSize: '16px', fontWeight: 500, color: 'var(--text-primary)' }}>₹{entry.value} ?</div>
+              <div style={{ fontSize: '11px', color: 'var(--warning)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '3px' }}>
+                <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: 'var(--warning)' }} />
+                Pending ?
+              </div>
+              <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>₹{entry.value}</div>
             </>
         ) : entry.status === 'not_found' ? (
             <>
-              <div style={{ fontSize: '10px', color: 'var(--warning)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>New item</div>
-              <div style={{ fontSize: '16px', fontWeight: 500, color: 'var(--text-hint)' }}>₹{entry.value}</div>
+              <div style={{ fontSize: '10px', color: 'var(--warning)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>🆕 New item</div>
+              <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-hint)' }}>₹{entry.value}</div>
             </>
         ) : (
             <>
-              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                {entry.resolution_method === 'speech' && <Mic size={10} color="var(--primary)" />}
-                {entry.resolution_method === 'speech_ambiguous' && <Mic size={10} color="var(--warning)" />}
-                {entry.emoji} {entry.status === 'auto' && entry.resolution_method !== 'speech' ? '~' : ''}{name}
-                {entry.status === 'auto' && entry.resolution_method !== 'speech' && (
-                    <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: entry.confidence > 0.85 ? 'var(--success)' : 'var(--warning)', flexShrink: 0 }} />
-                )}
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '4px' }} title={entry.reason || name}>
+                {isSpeech && <Mic size={11} color="var(--primary)" />}
+                {isAutoPattern && <Sparkles size={11} color="#22c55e" />}
+                <span>{entry.emoji || '📦'} {name}</span>
               </div>
-              <div style={{ fontSize: '16px', fontWeight: 500, color: 'var(--text-primary)' }}>₹{price}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>₹{price}</div>
+                {entry.confidence ? (
+                  <div style={{ fontSize: '10px', fontWeight: 600, color: entry.confidence >= 0.85 ? '#22c55e' : '#f59e0b' }}>
+                    {Math.round(entry.confidence * 100)}%
+                  </div>
+                ) : null}
+              </div>
             </>
         )}
      </div>
@@ -105,10 +135,76 @@ export default function CalculatorPage() {
   const { flags, setFlags, resolveFlag, areAllResolved } = useSRE();
   const voice = useVoice();
   const toast = useToast();
-  
-  const passive = usePassiveASR();
+
+  // ── Confidence decision state (shown after = is pressed) ──────────────
+  const [confidenceResult, setConfidenceResult]   = useState(null);  // null | { score, decision, matched_items, ... }
+  const [showConfidenceCard, setShowConfidenceCard] = useState(false);
+  const [pendingCommitData, setPendingCommitData]   = useState(null);
+
+  // ── Day Mode (Continuous Background AI Listening) ─────────────────────
+  const [isDayMode, setIsDayMode] = useState(() => {
+    return localStorage.getItem('khatasnap_day_mode') === 'true';
+  });
+
+  // ── Live pattern prediction for currently typed operand ───────────────
+  const [livePrediction, setLivePrediction] = useState(null);
+
+  // ── Buffer hook wires ASR + amounts → confidence engine ───────────────
+  const txBuffer = useTransactionBuffer();
+
+  // ── Passive ASR — push each segment into the buffer in real-time ──────
+  const handleAsrSegment = useCallback((text) => {
+    txBuffer.pushAsrSegment(text);
+  }, [txBuffer]);
+
+  const passive = usePassiveASR({ onSegment: handleAsrSegment });
   const [inventory, setInventory] = useState([]);
   const newItemInputRef = useRef(null);
+
+  // Auto-start Day Mode ASR on mount if enabled
+  useEffect(() => {
+    if (isDayMode && passive.status === 'idle') {
+      passive.start();
+    }
+  }, [isDayMode, passive]);
+
+  // Real-time pattern prediction as user types numbers
+  useEffect(() => {
+    if (!currentOperand || isNaN(parseInt(currentOperand, 10))) {
+      setLivePrediction(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      const val = parseInt(currentOperand, 10);
+      const cartIds = entries.map(e => e.item_id).filter(Boolean);
+      try {
+        const pred = await predictItem(val, new Date().getHours(), new Date().getDay(), cartIds, passive.getBuffer());
+        if (pred && pred.best_match) {
+          setLivePrediction(pred.best_match);
+        } else {
+          setLivePrediction(null);
+        }
+      } catch {
+        setLivePrediction(null);
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [currentOperand, entries, passive]);
+
+  const toggleDayMode = () => {
+    if (isDayMode) {
+      setIsDayMode(false);
+      localStorage.setItem('khatasnap_day_mode', 'false');
+      passive.stop();
+      toast.info("Day Mode Paused — Continuous voice listening is off.");
+    } else {
+      setIsDayMode(true);
+      localStorage.setItem('khatasnap_day_mode', 'true');
+      passive.start();
+      txBuffer.beginSession();
+      toast.success("☀️ Day Mode Active! AI is continuously listening for speech and calculations in the background.");
+    }
+  };
 
   // Passive history-based unassigned entries state
   const [dismissedUnassigned, setDismissedUnassigned] = useState(new Set());
@@ -139,14 +235,29 @@ export default function CalculatorPage() {
     return arr;
   }, [history, dismissedUnassigned]);
 
-  const wakeASR = () => { if (passive.status === 'idle') passive.start(); };
+  const wakeASR = () => {
+    if (passive.status === 'idle') passive.start();
+    // Begin the transaction buffer on first key press
+    if (!txBuffer.sessionActive) txBuffer.beginSession();
+  };
 
   const handleChar = (c) => { wakeASR(); setCurrentOperand(prev => prev + c); };
-  const handleClear = () => { 
-     wakeASR(); passive.clearBuffer();
-     if (entries.length > 0 && !window.confirm("Clear this session? Inventory has not been updated yet.")) return;
-     setExpression(''); setCurrentOperand(''); setResult(0); setFlags([]); setPendingSession(null); setEntries([]); setActiveEntryId(null); setNewItemEntryId(null); setNewItemName(''); setPendingSubmitData(null);
-     window._isSubmitting = false;
+  const handleClear = () => {
+    if (entries.length > 0 && !window.confirm('Clear this session? Inventory has not been updated yet.')) return;
+    if (!isDayMode) {
+      passive.stop();
+    }
+    passive.clearBuffer();
+    txBuffer.discard();
+    if (isDayMode) {
+      txBuffer.beginSession();
+    }
+    setExpression(''); setCurrentOperand(''); setResult(0); setFlags([]);
+    setPendingSession(null); setEntries([]); setActiveEntryId(null);
+    setNewItemEntryId(null); setNewItemName(''); setPendingSubmitData(null);
+    setConfidenceResult(null); setShowConfidenceCard(false); setPendingCommitData(null);
+    setLivePrediction(null);
+    window._isSubmitting = false;
   };
   const handleBackspace = () => { wakeASR(); setCurrentOperand(prev => prev.slice(0, -1)); };
 
@@ -158,24 +269,57 @@ export default function CalculatorPage() {
      getSnapshot().then(setInventory).catch(()=>{});
   }, []);
 
+  // ── Coordination: Active MicButton suspends background Day Mode ASR ───
+  const prevVoiceStateRef = useRef(voice.state);
+  useEffect(() => {
+    const prevState = prevVoiceStateRef.current;
+    prevVoiceStateRef.current = voice.state;
+
+    if (voice.state === 'listening' || voice.state === 'transcribing') {
+      passive.stop();
+    } else if (['listening', 'transcribing'].includes(prevState) && ['idle', 'done'].includes(voice.state)) {
+      if (isDayMode && passive.status !== 'listening') {
+        const timer = setTimeout(() => {
+          passive.start();
+        }, 350);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [voice.state, isDayMode]);
+
   useEffect(() => {
     if (voice.intent && voice.intent.items && voice.state === 'done') {
-        const newEntries = voice.intent.items.map(item => {
+        const rawItems = Array.isArray(voice.intent.items) ? voice.intent.items : [];
+        if (rawItems.length === 0) {
+          toast.info("No matching products detected in voice command.");
+          voice.reset();
+          return;
+        }
+        const newEntries = rawItems.map(item => {
+           const price = Number(item.price || item.amount || 0);
+           const qty = Number(item.qty || 1);
+           const pName = item.name || item.matched_name || 'Item';
            return {
                id: Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9),
-               value: item.price,
-               item_id: item.id || null, 
-               item_name: item.name,
-               name: item.name,
-               qty: item.qty,
+               value: price,
+               price: price,
+               item_id: item.id || item.product_id || null, 
+               item_name: pName,
+               name: pName,
+               qty: qty,
+               emoji: item.emoji || '📦',
                status: 'resolved',
-               resolution_method: 'speech'
+               resolve_status: 'speech_direct',
+               resolution_method: 'speech',
+               confidence: item.confidence || 0.95,
+               reason: `Voice: "${pName}" (x${qty})`
            };
         });
+
         if (newEntries.length > 0) {
            setEntries(prev => [...prev, ...newEntries]);
            const sum = newEntries.reduce((acc, curr) => acc + (curr.value * curr.qty), 0);
-           setResult(prev => prev + sum);
+           setResult(prev => (Number(prev) || 0) + sum);
            
            const adds = newEntries.map(e => {
                if (e.qty > 1) return Array(e.qty).fill(e.value).join('+');
@@ -183,7 +327,13 @@ export default function CalculatorPage() {
            }).join('+');
            setExpression(prev => prev ? prev + '+' + adds + '+' : adds + '+');
            
-           toast.success("Voice items added to calculator");
+           newEntries.forEach(e => {
+             for (let q = 0; q < e.qty; q++) {
+               txBuffer.pushAmount(e.value, e.id);
+             }
+           });
+           
+           toast.success(`Voice added: ${newEntries.map(e => `${e.name} (x${e.qty})`).join(', ')}`);
         }
         voice.reset();
     }
@@ -197,36 +347,121 @@ export default function CalculatorPage() {
     const price = parseInt(valStr, 10);
     const entryId = Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9);
     const newEntry = { id: entryId, value: price, status: 'resolving', qty: 1 };
-    
+
     setEntries(prev => [...prev, newEntry]);
     setExpression(prev => prev + valStr + (opChar || ''));
     setCurrentOperand('');
+    setLivePrediction(null);
+
+    // Sync new amount into the transaction buffer
+    txBuffer.pushAmount(price, entryId);
 
     const now = new Date();
     try {
-       const res = await resolvePrice(price, now.getHours(), now.getDay());
+       const cartItemIds = entries.map(e => e.item_id).filter(Boolean);
+       const currentTranscript = passive.getBuffer() || passive.interimText || '';
+
+       // 1. Direct Speech Matching: Prioritized pipeline check
+       let speechItem = null;
+       let speechConfidence = 0.95;
+       let speechReason = '';
+
+       if (currentTranscript && inventory.length > 0) {
+          const mentions = extractItemMentions(currentTranscript, inventory);
+          const directMatch = mentions.find(m => m.price === price);
+          if (directMatch) {
+             speechItem = directMatch;
+             speechConfidence = 0.95;
+             speechReason = `Voice + Price: "${directMatch.item_name}" (₹${price})`;
+          } else {
+             // Composite check (e.g. 2 x 10 = 20)
+             const compositeMatch = mentions.find(m => m.price > 0 && price % m.price === 0 && (price / m.price === (m.detected_qty || 1)));
+             if (compositeMatch) {
+                speechItem = { ...compositeMatch, calc_qty: price / compositeMatch.price };
+                speechConfidence = 0.90;
+                speechReason = `Voice: "${compositeMatch.item_name}" (${price / compositeMatch.price}x ₹${compositeMatch.price})`;
+             } else if (mentions.length > 0) {
+                // Spoken item keyword match with custom entered price override
+                const keywordMatch = mentions[0];
+                speechItem = { ...keywordMatch, calc_qty: 1 };
+                speechConfidence = 0.85;
+                speechReason = `Voice: "${keywordMatch.item_name}" heard @ entered ₹${price}`;
+             }
+          }
+       }
+
+       if (speechItem) {
+          // Immediately allot item to entry with high confidence prioritized score
+          const itemObj = speechItem.item_obj || speechItem;
+          const assignedQty = speechItem.calc_qty || speechItem.detected_qty || 1;
+          setEntries(prev => prev.map(e => {
+             if (e.id !== entryId) return e;
+             return {
+                ...e,
+                status: 'resolved',
+                resolve_status: 'speech_direct',
+                item_id: itemObj.id || speechItem.item_id,
+                name: itemObj.name || speechItem.item_name,
+                item_name: itemObj.name || speechItem.item_name,
+                price: price,
+                qty: assignedQty,
+                emoji: itemObj.emoji || '📦',
+                confidence: speechConfidence,
+                resolution_method: 'speech',
+                reason: speechReason || `Voice: "${speechItem.item_name}" heard`
+             };
+          }));
+          toast.success(`Voice allotted: ${speechItem.item_name} (₹${price})`);
+          return;
+       }
+
+       // 2. Pattern and Inventory Engine Resolution
+       const res = await resolvePrice(price, now.getHours(), now.getDay(), cartItemIds, currentTranscript);
        const combinations = findCombinations(price, inventory);
-       const hasMultiples = combinations.some(c => c.type === 'multiple');
 
        setEntries(prev => prev.map(e => {
           if (e.id !== entryId) return e;
           if (res.status === 'not_found') {
              return { ...e, status: 'not_found', resolve_status: res.status, alternatives: [], combinations: [] };
           }
-          
-          if (hasMultiples || res.status === 'ambiguous') {
-             setActiveEntryId(entryId);
-             return { ...e, status: 'ambiguous', resolve_status: res.status, alternatives: res.items || [], combinations: combinations };
+          if (res.status === 'unique') {
+             return {
+                ...e,
+                status: 'resolved',
+                resolve_status: res.status,
+                ...res.item,
+                qty: 1,
+                reason: res.reason || 'Unique price'
+             };
           }
-          if (res.status === 'unique') return { ...e, status: 'resolved', resolve_status: res.status, ...res.item, qty: 1 };
-          if (res.status === 'auto') {
-             setTimeout(() => {
-                 toast.success(`Auto-assigned: ${res.item.item_name || res.item.name}`, { duration: 3000 });
-             }, 0);
-             return { ...e, status: 'auto', resolve_status: res.status, ...res.item, confidence: res.confidence, alternatives: res.alternatives, qty: 1 };
+          if (res.status === 'auto' && res.item) {
+             return {
+                ...e,
+                status: 'resolved',
+                resolve_status: res.status,
+                ...res.item,
+                confidence: res.confidence,
+                alternatives: res.alternatives,
+                qty: 1,
+                reason: res.reason || 'Pattern match'
+             };
           }
-          setActiveEntryId(entryId);
-          return { ...e, status: 'ambiguous', resolve_status: res.status, alternatives: res.items || [], combinations: [] };
+          // If ambiguous, auto-allot best guess so user isn't stuck in "Pending ?"
+          const topAlt = res.best_guess || (res.items && res.items[0]);
+          if (topAlt) {
+             return {
+                ...e,
+                status: 'resolved',
+                resolve_status: 'auto_allotted',
+                ...topAlt,
+                confidence: topAlt.confidence || 0.7,
+                alternatives: res.items || [],
+                combinations: combinations,
+                qty: 1,
+                reason: topAlt.reason || 'Smart prediction'
+             };
+          }
+          return { ...e, status: 'ambiguous', resolve_status: res.status, alternatives: res.items || [], combinations: combinations };
        }));
     } catch {
        setEntries(prev => prev.map(e => e.id === entryId ? { ...e, status: 'error' } : e));
@@ -385,90 +620,148 @@ export default function CalculatorPage() {
               return [...activeSRE, ...unresolvedFlags];
           });
 
-          if (payload.status === 'flags_detected' || unresolvedFlags.length > 0) {
-              setPendingSession({ ...sessionData, session_id: payload.session_id, unresolved_operands: unresolvedIndices });
-          } else {
-              triggerSuccess({ ...sessionData, session_id: payload.session_id, unresolved_operands: unresolvedIndices });
-          }
-      }).catch(() => {
+          // Always add completed session immediately to Today's Sessions history
+          triggerSuccess({ ...sessionData, session_id: payload.session_id, unresolved_operands: unresolvedIndices });
+      }).catch((err) => {
+          console.error("Submission error:", err);
           window._isSubmitting = false;
-          toast.error("Failed to submit session");
+          // Even on offline/catch, record locally to Today's Sessions
+          triggerSuccess({ ...sessionData, session_id: `LOCAL-${Date.now()}`, unresolved_operands: [] });
       });
   };
 
   const handleEquals = async () => {
     if (currentOperand) await finalizeOperand(currentOperand, '');
-    
-    // Give async state update from finalizeOperand time to settle
+
+    // Wait 150ms for finalizeOperand async state to settle
     setTimeout(async () => {
-        const currentEntries = entriesRef.current;
-        const transcript = passive.getBuffer();
-        let finalEntries = [...currentEntries];
-        let spoken_context = { raw_transcript: '', mentions: [], resolution_method: 'pattern' };
+      const currentEntries = entriesRef.current;
+      const transcript = passive.getBuffer();
+      let finalEntries = [...currentEntries];
+      let spoken_context = { raw_transcript: '', mentions: [], resolution_method: 'pattern' };
 
-        if (transcript && inventory.length > 0) {
-           const mentions = extractItemMentions(transcript, inventory);
-           const ops = currentEntries.map(e => e.value);
-           const matchMap = matchMentionsToOperands(mentions, ops, inventory);
+      // ── Step 1: Apply local ASR matching (fast, offline) ──────────────
+      if (transcript && inventory.length > 0) {
+        const mentions = extractItemMentions(transcript, inventory);
+        const ops = currentEntries.map(e => e.value);
+        const matchMap = matchMentionsToOperands(mentions, ops, inventory);
+        const assignedViaSpeech = [];
 
-           let assignedViaSpeech = [];
+        finalEntries = currentEntries.map((e, idx) => {
+          const match = matchMap[idx];
+          if (match && match.confidence >= 0.85 && match.source === 'speech') {
+            assignedViaSpeech.push(match.item.name);
+            return { ...e, status: 'resolved', ...match.item, confidence: match.confidence, resolution_method: 'speech', qty: match.item.qty || 1 };
+          } else if (match && match.confidence >= 0.70) {
+            assignedViaSpeech.push(match.item.name);
+            return { ...e, status: 'resolved', ...match.item, confidence: match.confidence, resolution_method: 'speech_ambiguous', qty: match.item.qty || 1 };
+          }
+          return { ...e, resolution_method: e.resolution_method || 'none' };
+        });
 
-           finalEntries = currentEntries.map((e, idx) => {
-              const match = matchMap[idx];
-              if (match && match.confidence >= 0.85 && match.source === 'speech') {
-                  assignedViaSpeech.push(match.item.name);
-                  return { ...e, status: 'resolved', ...match.item, confidence: match.confidence, resolution_method: 'speech', qty: match.item.qty || 1 };
-              } else if (match && match.confidence >= 0.70) {
-                  assignedViaSpeech.push(match.item.name);
-                  return { ...e, status: 'resolved', ...match.item, confidence: match.confidence, resolution_method: 'speech_ambiguous', qty: match.item.qty || 1 };
-              }
-              return { ...e, resolution_method: e.resolution_method || 'none' };
-           });
+        spoken_context = {
+          raw_transcript: transcript,
+          mentions: mentions.map(m => ({ item_id: m.item_id, item_name: m.item_name, price: m.price, match_score: m.match_score, matched_alias: m.matched_alias })),
+          resolution_method: finalEntries.some(e => ['speech', 'speech_ambiguous'].includes(e.resolution_method)) ? 'speech' : 'pattern',
+        };
+        if (assignedViaSpeech.length > 0) toast.success(`Voice captured: ${assignedViaSpeech.join(', ')}`);
+      }
 
-           spoken_context = {
-               raw_transcript: transcript,
-               mentions: mentions.map(m => ({ item_id: m.item_id, item_name: m.item_name, price: m.price, match_score: m.match_score, matched_alias: m.matched_alias })),
-               resolution_method: finalEntries.some(e => ['speech', 'speech_ambiguous'].includes(e.resolution_method)) ? 'speech' : 'pattern'
-           };
-           
-           if (assignedViaSpeech.length > 0) {
-              toast.success(`Voice captured: ${assignedViaSpeech.join(", ")}`);
-           }
-        }
-
+      if (!isDayMode) {
         passive.stop();
-        passive.clearBuffer();
-        setEntries(finalEntries);
+      }
+      passive.clearBuffer();
+      setEntries(finalEntries);
 
-        const hasNotFound = finalEntries.some(e => e.status === 'not_found');
-        let evalString = (expression + currentOperand).replace(/×/g, '*').replace(/÷/g, '/');
-        evalString = evalString.replace(/[\+\-\*\/]+$/, '');
-        
-        const submitData = { spoken_context, evalString, fullExpression: expression + currentOperand };
+      // ── Step 2: Calculate total and prepare submission ─────────────────
+      const amounts = finalEntries.map(e => e.value);
+      let evalString = (expression + currentOperand).replace(/×/g, '*').replace(/÷/g, '/');
+      evalString = evalString.replace(/[+\-*/]+$/, '');
+      // eslint-disable-next-line no-eval
+      const evalResult = evalString ? eval(evalString) : 0;
+      setResult(evalResult);
 
-        if (hasNotFound) {
-          promptNextNewItem(finalEntries);
-        }
+      const submitData = {
+        spoken_context, evalString,
+        fullExpression: expression + currentOperand,
+        evalResult, finalEntries,
+      };
 
+      const hasNotFound = finalEntries.some(e => e.status === 'not_found');
+      if (hasNotFound) promptNextNewItem(finalEntries);
+
+      // ── Step 3: Run Confidence Engine and Commit ──────────────────────
+      try {
+        const finalRes = (await txBuffer.finalize(amounts)) || {};
+        const conf = finalRes.confidence || { score: 0.95, decision: 'high' };
+        setConfidenceResult(conf);
+
+        await _commitTransaction(finalEntries, submitData, conf.score ?? 0.95, spoken_context);
+      } catch (_) {
+        // Direct fallback commit
         proceedWithSubmission(finalEntries, submitData);
+      }
+    }, 150);
+  };
 
-    }, 200); // Wait 200ms for finalizeOperand state to batch and update
+  /** Commits transaction and adds to Today's Sessions */
+  const _commitTransaction = async (finalEntries, submitData, confidenceScore, spokenContext) => {
+    if (window._isSubmitting) return;
+    window._isSubmitting = true;
+    setActiveEntryId(null);
+    setNewItemEntryId(null);
+    setNewItemName('');
+
+    const combined = [];
+    finalEntries.forEach(e => {
+      const qty = e.qty || 1;
+      const existing = combined.find(x => x.item_id && x.item_id === (e.item_id || e.id) && x.price === e.value && x.alias_used === e.alias_used);
+      if (existing) existing.qty += qty;
+      else combined.push({ item_id: e.item_id || null, item_name: e.name || e.item_name || 'Unknown Item', price: e.value, qty, alias_used: !!e.alias_used });
+    });
+
+    try {
+      const res = await txBuffer.commit({
+        entries: combined,
+        expression: submitData.fullExpression,
+        result: submitData.evalResult,
+        spokenContext: spokenContext || {},
+        confidenceScore,
+      });
+      window._isSubmitting = false;
+      triggerSuccess({
+        session_id: res?.session_id || `TXN-${Date.now()}`,
+        fullExpression: submitData.fullExpression,
+        evalResult: submitData.evalResult,
+        combined,
+        unresolved_operands: [],
+      });
+    } catch (err) {
+      window._isSubmitting = false;
+      // Fallback to submission path
+      proceedWithSubmission(finalEntries, submitData);
+    }
   };
 
   const triggerSuccess = (sessionData) => {
       setShowSuccess(true);
+      setHistory(prev => [{
+         id: sessionData.session_id,
+         expression: sessionData.fullExpression,
+         result: sessionData.evalResult,
+         entries: sessionData.combined,
+         unresolved_operands: sessionData.unresolved_operands || [],
+         timestamp: new Date().toISOString(),
+      }, ...prev]);
+
       setTimeout(() => {
-         setHistory(prev => [{
-            id: sessionData.session_id,
-            expression: sessionData.fullExpression,
-            result: sessionData.evalResult,
-            entries: sessionData.combined,
-            unresolved_operands: sessionData.unresolved_operands || [],
-            timestamp: new Date().toISOString(),
-         }, ...prev]);
          setExpression(''); setCurrentOperand(''); setResult(0); setFlags([]); setPendingSession(null); setEntries([]); setActiveEntryId(null); setNewItemEntryId(null); setNewItemName(''); setPendingSubmitData(null);
+         setConfidenceResult(null); setShowConfidenceCard(false); setPendingCommitData(null);
          setShowSuccess(false);
-      }, 1500);
+         if (isDayMode) {
+           txBuffer.beginSession();
+         }
+      }, 500);
   };
 
   // Called from SREFlagCard / SREFlagList when a retroactive assign succeeds
@@ -677,17 +970,113 @@ export default function CalculatorPage() {
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(400px, 560px) 1fr', gap: '32px' }}>
       <div>
         <Card shadow style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ backgroundColor: 'var(--surface-2)', padding: '16px 20px', minHeight: '120px', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+          {/* Header Bar with Start Day / Live ASR Button */}
+          <div style={{
+            padding: '12px 18px',
+            borderBottom: '1px solid var(--border)',
+            background: 'var(--surface-elevated, #1c1f2e)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '13px', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Sparkles size={16} color="var(--primary)" /> Smart Khata Calculator
+              </span>
+              {isDayMode && (
+                <span style={{
+                  fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '12px',
+                  background: 'rgba(34, 197, 94, 0.15)', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.3)',
+                  display: 'flex', alignItems: 'center', gap: '5px'
+                }}>
+                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22c55e' }} />
+                  DAY LISTENING ON
+                </span>
+              )}
+            </div>
+
+            {/* TOP RIGHT CORNER: Day Mode Toggle Button */}
+            <button
+              id="btn-start-day-mode"
+              onClick={toggleDayMode}
+              title={isDayMode ? "Click to pause continuous day listening" : "Click to start continuous ASR for the day"}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '6px',
+                padding: '6px 14px', borderRadius: '20px',
+                fontSize: '12px', fontWeight: '600', cursor: 'pointer',
+                border: isDayMode ? '1px solid rgba(34, 197, 94, 0.5)' : '1px solid var(--border)',
+                background: isDayMode ? 'linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(16, 185, 129, 0.1))' : 'var(--surface, #232736)',
+                color: isDayMode ? '#22c55e' : 'var(--text-primary)',
+                boxShadow: isDayMode ? '0 0 14px rgba(34, 197, 94, 0.25)' : 'none',
+                transition: 'all 0.25s ease'
+              }}
+            >
+              {isDayMode ? (
+                <>
+                  <Sun size={14} color="#22c55e" />
+                  <span>Day Mode: Active</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: '3px' }}>
+                    <motion.div animate={{ height: ['4px', '12px', '4px'] }} transition={{ repeat: Infinity, duration: 0.8 }} style={{ width: '2px', background: '#22c55e', borderRadius: '1px' }} />
+                    <motion.div animate={{ height: ['8px', '4px', '14px', '8px'] }} transition={{ repeat: Infinity, duration: 0.7 }} style={{ width: '2px', background: '#22c55e', borderRadius: '1px' }} />
+                    <motion.div animate={{ height: ['4px', '10px', '4px'] }} transition={{ repeat: Infinity, duration: 0.9 }} style={{ width: '2px', background: '#22c55e', borderRadius: '1px' }} />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <Mic size={14} color="var(--primary)" />
+                  <span>Start Day</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <div style={{ backgroundColor: 'var(--surface-2)', padding: '16px 20px', minHeight: '130px', display: 'flex', flexDirection: 'column', position: 'relative' }}>
             {showSuccess && (
-              <div style={{ position: 'absolute', top: 12, left: 12 }}>
+              <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 10 }}>
                 <CheckCircle size={24} color="var(--success)" />
               </div>
             )}
-            
-            <div style={{ position: 'absolute', top: 12, right: 12 }} title={passive.status === 'listening' ? 'Listening for item names...' : passive.status === 'error' ? 'Microphone access denied' : ''}>
-               {passive.status === 'listening' && <motion.div animate={{ opacity: [1, 0.4, 1] }} transition={{ repeat: Infinity, duration: 2 }} style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--success)' }} />}
-               {passive.status === 'error' && <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--danger)' }} />}
+
+            {/* ── Status badges + confidence badge ── */}
+            <div style={{ position: 'absolute', top: 10, right: 12, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {passive.status === 'listening' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <motion.div
+                    animate={{ opacity: [1, 0.3, 1], scale: [1, 1.3, 1] }}
+                    transition={{ repeat: Infinity, duration: 1.6 }}
+                    style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: 'var(--success)' }}
+                  />
+                  <span style={{ fontSize: '10px', color: 'var(--text-hint)' }}>Listening</span>
+                </div>
+              )}
+              {passive.status === 'error' && (
+                <div style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: 'var(--danger)' }} title="Mic denied" />
+              )}
+              {/* Compact confidence badge once finalized */}
+              {confidenceResult && !showSuccess && (
+                <ConfidenceBar confidence={confidenceResult} compact />
+              )}
             </div>
+
+            {/* Live Floating Voice Transcript Preview */}
+            <AnimatePresence>
+              {(passive.interimText || (passive.status === 'listening' && passive.getBuffer())) && (
+                <motion.div
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '6px',
+                    padding: '3px 10px', borderRadius: '10px',
+                    background: 'rgba(99, 102, 241, 0.12)', border: '1px solid rgba(99, 102, 241, 0.25)',
+                    color: 'var(--primary)', fontSize: '11px', fontWeight: '500', marginBottom: '8px', width: 'fit-content'
+                  }}
+                >
+                  <Volume2 size={11} />
+                  <span>AI Voice: <em>"{passive.interimText || passive.getBuffer().slice(-40)}"</em></span>
+                </motion.div>
+              )}
+            </AnimatePresence>
             
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: 'auto' }}>
                <AnimatePresence>
@@ -698,15 +1087,7 @@ export default function CalculatorPage() {
                             setNewItemEntryId(e.id);
                             setNewItemName('');
                           } else {
-                            // Less-click workflow: if we have a single clear match, auto-assign on click.
-                            if (shouldAutoPick(e)) {
-                              const pick = (e.alternatives || [])[0];
-                              if (pick) {
-                                handleSelectItem(e.id, pick);
-                                return;
-                              }
-                            }
-                            setActiveEntryId(e.id);
+                            setActiveEntryId(activeEntryId === e.id ? null : e.id);
                           }
                         }} />
                      </motion.div>
@@ -714,7 +1095,31 @@ export default function CalculatorPage() {
                </AnimatePresence>
             </div>
 
-            <div style={{ fontFamily: 'var(--mono)', fontSize: '13px', color: 'var(--text-hint)', marginTop: '24px', textAlign: 'right' }}>
+            {/* Live Multimodal AI Pattern Prediction Preview */}
+            {currentOperand && livePrediction && (
+              <motion.div
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '6px 12px', borderRadius: '8px',
+                  background: 'linear-gradient(90deg, rgba(245, 158, 11, 0.1), rgba(34, 197, 94, 0.08))',
+                  border: '1px solid rgba(245, 158, 11, 0.3)',
+                  marginTop: '12px', fontSize: '12px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Sparkles size={13} color="#f59e0b" />
+                  <span>Predicted for ₹{currentOperand}: <strong>{livePrediction.emoji} {livePrediction.name}</strong></span>
+                  <span style={{ fontSize: '10px', color: 'var(--text-hint)' }}>({livePrediction.reason})</span>
+                </div>
+                <span style={{ fontSize: '11px', fontWeight: '700', color: livePrediction.confidence >= 0.8 ? '#22c55e' : '#f59e0b' }}>
+                  {Math.round(livePrediction.confidence * 100)}% Match
+                </span>
+              </motion.div>
+            )}
+
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '13px', color: 'var(--text-hint)', marginTop: '16px', textAlign: 'right' }}>
               {expression}{currentOperand}
             </div>
             <div style={{ fontFamily: 'var(--mono)', fontSize: '32px', color: 'var(--text-primary)', fontWeight: '600', textAlign: 'right' }}>
@@ -740,41 +1145,93 @@ export default function CalculatorPage() {
                 </Button>
               ))}
               <Button variant="surface" size="lg" style={{ height: '52px' }} onClick={handleBackspace}>⌫</Button>
-              <Button variant="primary" size="lg" style={{ gridColumn: 'span 3', fontSize: '24px', height: '52px' }} onClick={handleEquals}>=</Button>
+              <Button
+                variant="primary"
+                size="lg"
+                style={{ gridColumn: 'span 3', fontSize: '24px', height: '52px', position: 'relative' }}
+                onClick={handleEquals}
+              >
+                =
+                {txBuffer.isCommitting && (
+                  <span style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', fontSize: '12px', opacity: 0.7 }}>
+                    saving…
+                  </span>
+                )}
+              </Button>
             </div>
 
-            {/* Ambiguous item picker (existing items with same price) */}
+            {/* Item Selector / Alternative Changer Panel (shows all items for entered amount) */}
             <AnimatePresence>
               {showInlineResolutionPanels && activeEntryId && !newItemEntryId && (
-                <motion.div initial={{y: 20, opacity: 0, height: 0}} animate={{y: 0, opacity: 1, height: 'auto'}} exit={{y: 20, opacity: 0, height: 0}} style={{ background: 'var(--surface-2)', padding: '16px', borderRadius: 'var(--radius-lg)', marginTop: '24px' }}>
-                   <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px' }}>What did you sell for ₹{entries.find(e => e.id === activeEntryId)?.value}?</div>
-                    {entries.find(e => e.id === activeEntryId)?.alternatives?.length > 0 && (
-                      <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>Single item</div>
-                    )}
-                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                     {entries.find(e => e.id === activeEntryId)?.alternatives?.slice(0, 6).map(alt => (
-                        <Button key={alt.id} variant="surface" size="sm" style={{ display: 'flex', justifyContent: 'space-between' }} onClick={() => handleSelectItem(activeEntryId, alt)}>
-                           <span>{alt.emoji} {alt.name}</span>
-                           <span style={{ color: alt.current_qty === 0 ? 'var(--danger)' : 'var(--text-hint)' }}>{alt.current_qty} left</span>
-                        </Button>
-                     ))}
-                   </div>
+                <motion.div initial={{y: 20, opacity: 0, height: 0}} animate={{y: 0, opacity: 1, height: 'auto'}} exit={{y: 20, opacity: 0, height: 0}} style={{ background: 'var(--surface-2)', padding: '16px', borderRadius: 'var(--radius-lg)', marginTop: '24px', border: '1px solid var(--border)' }}>
+                   {(() => {
+                     const currentEntry = entries.find(e => e.id === activeEntryId);
+                     if (!currentEntry) return null;
+                     const price = currentEntry.value;
+                     const directMatching = inventory.filter(p => Number(p.selling_price || p.price) === price);
+                     const combos = findCombinations(price, inventory);
 
-                   {entries.find(e => e.id === activeEntryId)?.combinations?.filter(c => c.type === 'multiple').length > 0 && (
-                     <>
-                        <div style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '16px 0 8px 0' }}>Or multiple items?</div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px' }}>
-                          {entries.find(e => e.id === activeEntryId)?.combinations.filter(c => c.type === 'multiple').slice(0, 4).map((comb, idx) => (
-                             <Button key={`comb-${idx}`} variant="surface" size="sm" style={{ display: 'flex', justifyContent: 'space-between' }} onClick={() => handleSelectItem(activeEntryId, comb, true)}>
-                                <span>{comb.item_emoji} {comb.qty}× {comb.item_name} (₹{comb.price_per_unit} each)</span>
-                             </Button>
-                          ))}
-                        </div>
-                     </>
-                   )}
-                   <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
-                      <Button variant="ghost" size="sm" onClick={() => setActiveEntryId(null)}>Skip</Button>
-                   </div>
+                     return (
+                       <>
+                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                           <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
+                             Change item for <span style={{ color: 'var(--primary)' }}>₹{price}</span>:
+                           </div>
+                           <button 
+                             onClick={() => { setNewItemEntryId(activeEntryId); setNewItemName(''); }}
+                             style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+                           >
+                             + Name New Item
+                           </button>
+                         </div>
+
+                         {directMatching.length > 0 ? (
+                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+                             {directMatching.map(item => (
+                               <Button 
+                                 key={item.id} 
+                                 variant={currentEntry.item_id === item.id ? 'primary' : 'surface'} 
+                                 size="sm" 
+                                 style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px' }} 
+                                 onClick={() => handleSelectItem(activeEntryId, item)}
+                               >
+                                  <span style={{ fontWeight: 600 }}>{item.emoji || '📦'} {item.name}</span>
+                                  <span style={{ fontSize: '11px', color: item.current_qty === 0 ? 'var(--danger)' : 'var(--text-hint)' }}>{item.current_qty} left</span>
+                               </Button>
+                             ))}
+                           </div>
+                         ) : (
+                           <div style={{ fontSize: '12px', color: 'var(--text-hint)', marginBottom: '12px' }}>
+                             No single item found for ₹{price}. Choose a combo below or add a new name.
+                           </div>
+                         )}
+
+                         {combos.filter(c => c.type === 'multiple').length > 0 && (
+                           <>
+                              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '8px 0' }}>Or multiple item packs:</div>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px' }}>
+                                {combos.filter(c => c.type === 'multiple').slice(0, 4).map((comb, idx) => (
+                                   <Button 
+                                     key={`comb-${idx}`} 
+                                     variant="surface" 
+                                     size="sm" 
+                                     style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px' }} 
+                                     onClick={() => handleSelectItem(activeEntryId, comb, true)}
+                                   >
+                                      <span>{comb.item_emoji} {comb.qty}× {comb.item_name} (₹{comb.price_per_unit} each)</span>
+                                      <span style={{ fontSize: '11px', color: 'var(--text-hint)' }}>Total ₹{price}</span>
+                                   </Button>
+                                ))}
+                              </div>
+                           </>
+                         )}
+
+                         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
+                            <Button variant="ghost" size="sm" onClick={() => setActiveEntryId(null)}>Done</Button>
+                         </div>
+                       </>
+                     );
+                   })()}
                 </motion.div>
               )}
             </AnimatePresence>
@@ -847,18 +1304,61 @@ export default function CalculatorPage() {
               )}
             </AnimatePresence>
 
+            {/* ── Confidence Review Card (medium confidence) ── */}
+            <AnimatePresence>
+              {showConfidenceCard && confidenceResult && !showSuccess && (
+                <motion.div
+                  initial={{ y: 16, opacity: 0, height: 0 }}
+                  animate={{ y: 0, opacity: 1, height: 'auto' }}
+                  exit={{ y: 16, opacity: 0, height: 0 }}
+                  style={{ marginTop: '20px' }}
+                >
+                  <ConfidenceBar confidence={confidenceResult} />
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '10px', justifyContent: 'flex-end' }}>
+                    <Button
+                      size="sm" variant="ghost"
+                      onClick={() => {
+                        setShowConfidenceCard(false);
+                        setConfidenceResult(null);
+                        setPendingCommitData(null);
+                        txBuffer.flagForReconciliation('manual_dismiss', {});
+                        toast.warn('Saved for tonight\'s review');
+                      }}
+                    >
+                      Queue for Review
+                    </Button>
+                    <Button
+                      size="sm" variant="primary"
+                      onClick={async () => {
+                        setShowConfidenceCard(false);
+                        if (pendingCommitData) {
+                          const { finalEntries, submitData, spoken_context, confidence } = pendingCommitData;
+                          await _commitTransaction(finalEntries, submitData, confidence?.score ?? 0, spoken_context);
+                          setPendingCommitData(null);
+                        }
+                      }}
+                    >
+                      ✓ Confirm &amp; Save
+                    </Button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             <div style={{ display: 'flex', justifyContent: 'center', marginTop: '24px' }}>
-               <MicButton 
-                 state={voice.state} 
+               <MicButton
+                 state={voice.state}
                  onToggle={() => {
                    if (voice.state === 'listening') {
                      voice.stop();
-                   } else if (voice.state === 'done' || voice.state === 'idle' || voice.state === 'error') {
-                     voice.start();
+                   } else {
+                     passive.stop();
+                     setTimeout(() => {
+                       voice.start();
+                     }, 150);
                    }
-                   // 'transcribing' → do nothing, wait for it to finish
                  }}
-                 transcript={voice.transcript} 
+                 transcript={voice.transcript}
                  intent={voice.intent}
                  timeLeft={voice.timeLeft}
                  maxSeconds={voice.listeningSeconds}

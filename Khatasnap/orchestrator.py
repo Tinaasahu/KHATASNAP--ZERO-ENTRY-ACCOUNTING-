@@ -315,10 +315,17 @@ def _extract_and_score(blocks: list, filename: str) -> dict:
         data_rows    = rows[header_idx + 1: summary_start]
         summary_rows = rows[summary_start:] if summary_start else []
     else:
-        vendor_rows  = rows[:min(8, len(rows))]
+        # Dynamic partitioning for receipts / simple bills without formal table headers
+        summary_start = None
+        for i in range(len(rows)):
+            if _is_summary(rows[i]):
+                summary_start = i
+                break
+        vendor_end = min(2, len(rows)) if len(rows) > 3 else (1 if len(rows) > 1 else 0)
+        vendor_rows  = rows[:vendor_end]
         header_rows  = []
-        data_rows    = rows[8:]
-        summary_rows = []
+        data_rows    = rows[vendor_end:summary_start] if summary_start is not None else rows[vendor_end:]
+        summary_rows = rows[summary_start:] if summary_start is not None else []
 
     logger.info(
         f"Partitions: {len(vendor_rows)} vendor | "

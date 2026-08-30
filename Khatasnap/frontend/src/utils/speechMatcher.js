@@ -115,30 +115,41 @@ export function extractItemMentions(transcript, inventoryItems) {
   
   mentions.sort((a, b) => b.match_score - a.match_score);
   
-  const seenIds = new Set();
-  const seenAliases = new Set();
+  const claimedWords = new Set();
   const deduped = [];
+  
   for (const m of mentions) {
-     if (!seenIds.has(m.item_id) && (!m.matched_alias || !seenAliases.has(m.matched_alias))) {
-        seenIds.add(m.item_id);
-        if (m.matched_alias) seenAliases.add(m.matched_alias);
-        
-        // Find if any quantity word occurs before or after the alias mention
-        let detectedQty = 1;
-        if (m.matched_alias) {
-            const indexAlias = words.indexOf(m.matched_alias.split(' ')[0]);
-            
-            if (indexAlias > 0 && quantityWords[words[indexAlias - 1]]) {
-                detectedQty = quantityWords[words[indexAlias - 1]];
-            } else if (indexAlias < words.length - 1 && quantityWords[words[indexAlias + 1]]) {
-                detectedQty = quantityWords[words[indexAlias + 1]];
-            } else if (indexAlias > 0 && !isNaN(parseInt(words[indexAlias - 1], 10))) {
-                detectedQty = parseInt(words[indexAlias - 1], 10);
-            }
+     if (!m.matched_alias) continue;
+     const aliasWords = m.matched_alias.split(' ');
+     const firstWord = aliasWords[0];
+     const indexAlias = words.indexOf(firstWord);
+     
+     if (indexAlias !== -1) {
+        const spanIndices = [];
+        for (let k = 0; k < aliasWords.length; k++) {
+           if (indexAlias + k < words.length) spanIndices.push(indexAlias + k);
         }
         
-        m.detected_qty = detectedQty;
-        deduped.push(m);
+        const hasOverlap = spanIndices.some(idx => claimedWords.has(idx));
+        if (!hasOverlap) {
+           spanIndices.forEach(idx => claimedWords.add(idx));
+           
+           // Find if any quantity word occurs before or after the alias mention
+           let detectedQty = 1;
+           if (indexAlias > 0 && quantityWords[words[indexAlias - 1]]) {
+               detectedQty = quantityWords[words[indexAlias - 1]];
+               claimedWords.add(indexAlias - 1);
+           } else if (indexAlias < words.length - 1 && quantityWords[words[indexAlias + 1]]) {
+               detectedQty = quantityWords[words[indexAlias + 1]];
+               claimedWords.add(indexAlias + 1);
+           } else if (indexAlias > 0 && !isNaN(parseInt(words[indexAlias - 1], 10))) {
+               detectedQty = parseInt(words[indexAlias - 1], 10);
+               claimedWords.add(indexAlias - 1);
+           }
+           
+           m.detected_qty = detectedQty;
+           deduped.push(m);
+        }
      }
   }
   
@@ -147,24 +158,42 @@ export function extractItemMentions(transcript, inventoryItems) {
 
 export function matchMentionsToOperands(mentions, operands, inventoryItems) {
    return operands.map(op => {
-      // First try direct price matches
+      // 1. Direct price match with speech keyword
       let matchingMentions = mentions.filter(m => m.price === op);
       
-      // If no direct price match, look for composite amounts (e.g. op is 15, item price is 5, qty is 3)
+      // 2. Composite match (e.g. op is 20, item price is 10, qty is 2)
       if (matchingMentions.length === 0) {
-          const composites = mentions.filter(m => op % m.price === 0 && op / m.price === (m.detected_qty || 1));
+          const composites = mentions.filter(m => m.price > 0 && op % m.price === 0 && op / m.price === (m.detected_qty || 1));
           if (composites.length > 0) {
               matchingMentions = composites.map(m => ({...m, composite_match: true, calc_qty: op / m.price}));
           }
       }
       
+      // 3. Spoken Keyword match with custom entered price override
+      if (matchingMentions.length === 0 && mentions.length > 0) {
+          matchingMentions = mentions.map(m => ({ ...m, custom_price_override: true }));
+      }
+      
       if (matchingMentions.length === 1) {
          const m = matchingMentions[0];
+         let conf = 0.95;
+         let src = 'speech';
+         if (m.composite_match) {
+             conf = 0.90;
+             src = 'speech_composite';
+         } else if (m.custom_price_override) {
+             conf = 0.85;
+             src = 'speech_price_override';
+         }
+         
          return {
             operand: op,
             item: m.composite_match ? { ...m.item_obj, qty: m.calc_qty } : m.item_obj,
-            confidence: Math.min(1.0, 0.90 + (m.match_score * 0.10) + (m.composite_match ? 0.05 : 0)),
-            source: 'speech'
+            confidence: conf,
+            source: src,
+            reason: m.custom_price_override 
+                    ? `Voice: "${m.item_name}" heard @ entered ₹${op}` 
+                    : `Voice: "${m.item_name}" heard (₹${op})`
          };
       } else if (matchingMentions.length > 1) {
          const best = matchingMentions[0];
@@ -172,7 +201,8 @@ export function matchMentionsToOperands(mentions, operands, inventoryItems) {
             operand: op,
             item: best.composite_match ? { ...best.item_obj, qty: best.calc_qty } : best.item_obj,
             confidence: 0.75,
-            source: 'speech_ambiguous'
+            source: 'speech_ambiguous',
+            reason: `Voice: "${best.item_name}" heard (multiple candidates)`
          };
       } else {
          return {

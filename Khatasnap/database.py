@@ -231,11 +231,43 @@ def init_db():
             UNIQUE(item_id, alias_price)
         );
 
+        -- ─── Parallel ASR + Calculator transaction buffer ─────────────────
+        -- Stores staged (unconfirmed) transactions until confidence check passes.
+        CREATE TABLE IF NOT EXISTS staged_transactions (
+            txn_id           TEXT PRIMARY KEY,
+            asr_buffer       TEXT DEFAULT '[]',   -- JSON: accumulated ASR segments [{text, ts}]
+            calc_amounts     TEXT DEFAULT '[]',   -- JSON: [{value, entry_id, resolved_item_id?}]
+            matched_items    TEXT DEFAULT '[]',   -- JSON: confidence engine output
+            confidence_score REAL DEFAULT 0,
+            decision         TEXT DEFAULT 'pending', -- pending|high|medium|low
+            status           TEXT DEFAULT 'pending', -- pending|committed|flagged|cancelled
+            created_at       TEXT DEFAULT (datetime('now')),
+            committed_at     TEXT,
+            flagged_at       TEXT
+        );
+
+        -- ─── Night reconciliation queue ───────────────────────────────────
+        -- Low-confidence transactions go here for shopkeeper review.
+        CREATE TABLE IF NOT EXISTS night_reconciliation (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            txn_id           TEXT,
+            session_id       INTEGER REFERENCES calculator_sessions(id),
+            reason           TEXT NOT NULL,  -- low_confidence|asr_mismatch|inventory_insufficient|manual
+            confidence_score REAL DEFAULT 0,
+            payload_json     TEXT,           -- full snapshot: {amounts, asr_buffer, matched_items}
+            status           TEXT DEFAULT 'pending', -- pending|resolved|dismissed
+            notes            TEXT,
+            reviewed_at      TEXT,
+            created_at       TEXT DEFAULT (datetime('now'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
         CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);
         CREATE INDEX IF NOT EXISTS idx_stock_logs_created_at ON stock_logs(created_at);
         CREATE INDEX IF NOT EXISTS idx_ocr_corrections_norm ON ocr_corrections(norm_text);
         CREATE INDEX IF NOT EXISTS idx_recon_flags_pending ON reconciliation_flags(resolution, created_at);
+        CREATE INDEX IF NOT EXISTS idx_staged_txn_status ON staged_transactions(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_night_recon_status ON night_reconciliation(status, created_at);
     """)
 
     # Soft migrations
@@ -283,23 +315,37 @@ def init_db():
     for c in cats:
         cur.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (c,))
 
-    # Seed demo products matching the mobile UI
+    # Seed demo products matching Indian Kirana store inventory
     demo_products = [
-        ('Parle G',     'Biscuits',  10,  10, 100, '🍪'),
-        ('Maggi',       'Noodles',   12,  12,  50, '🍜'),
-        ('Coca Cola',   'Beverages', 40,  40,  30, '🥤'),
-        ('Lays',        'Chips',     20,  20,  75, '🥔'),
-        ('Bourbon',     'Biscuits',  15,  15,   8, '🍫'),
-        ('Sprite',      'Beverages', 40,  40,   0, '🫧'),
-        ('Kurkure',     'Chips',     20,  20,  60, '🌽'),
-        ('Good Day',    'Biscuits',  25,  25,  45, '🍪'),
-        ('Dairy Milk',  'Chocolates',20,  20,  35, '🍫'),
-        ('Frooti',      'Beverages', 15,  15,  55, '🥭'),
-        ('Hide & Seek', 'Biscuits',  30,  30,  28, '🍪'),
-        ('Bhujia',      'Snacks',    30,  30,  40, '🫙'),
-        ('Nimbooz',     'Beverages', 20,  20,  22, '🍋'),
-        ('Monaco',      'Biscuits',  10,  10,  90, '🫓'),
-        ('Choco Pie',   'Chocolates',35,  35,  18, '🍫'),
+        ('Parle G',              'Biscuits',            8.5,   10,  120, '🍪'),
+        ('Parle G 5',            'Biscuits',            4.2,    5,  150, '🍪'),
+        ('Maggi',                'Noodles',            10.5,   12,  140, '🍜'),
+        ('Maggi 14',             'Noodles',            12.0,   14,  100, '🍜'),
+        ('Lays',                 'Chips',              16.5,   20,   95, '🥔'),
+        ('Lays Magic Masala',    'Chips',              16.5,   20,  105, '🥔'),
+        ('Kurkure',              'Chips',              16.5,   20,   90, '🌽'),
+        ('Coca Cola',            'Beverages',          34.0,   40,   60, '🥤'),
+        ('Sprite',               'Beverages',          34.0,   40,   55, '🫧'),
+        ('Thums Up',             'Beverages',          34.0,   40,   70, '🥤'),
+        ('Frooti',               'Beverages',          12.5,   15,   80, '🥭'),
+        ('Nimbooz',              'Beverages',          16.5,   20,   65, '🍋'),
+        ('Dairy Milk',           'Chocolates',         16.5,   20,   85, '🍫'),
+        ('Dairy Milk Silk',      'Chocolates',         68.0,   80,   45, '🍫'),
+        ('KitKat',               'Chocolates',         16.5,   20,   75, '🍫'),
+        ('5 Star',               'Chocolates',          8.2,   10,  110, '🍫'),
+        ('Good Day',             'Biscuits',           21.0,   25,   85, '🍪'),
+        ('Hide & Seek',          'Biscuits',           25.0,   30,   60, '🍪'),
+        ('Bourbon',              'Biscuits',           12.5,   15,   75, '🍫'),
+        ('Monaco',               'Biscuits',            8.5,   10,  100, '🫓'),
+        ('Haldiram Bhujia',      'Snacks',             25.0,   30,   70, '🫙'),
+        ('Haldiram Aloo Bhujia', 'Snacks',             25.0,   30,   80, '🥔'),
+        ('Amul Butter',          'Dairy',              50.0,   56,   40, '🧈'),
+        ('Amul Taaza Milk',      'Dairy',              25.5,   27,   60, '🥛'),
+        ('Tata Tea Premium',     'Groceries & Staples',105.0, 120,   35, '☕'),
+        ('Fortune Sunflower Oil','Oil & Ghee',         125.0, 140,   40, '🌻'),
+        ('Aashirvaad Atta',      'Groceries & Staples',215.0, 245,   30, '🌾'),
+        ('Surf Excel',           'Soap & Hygiene',     115.0, 130,   35, '🧼'),
+        ('Dettol Soap',          'Soap & Hygiene',      32.0,  38,   55, '🧼'),
     ]
 
     for name, cat, buy, sell, qty, emoji in demo_products:

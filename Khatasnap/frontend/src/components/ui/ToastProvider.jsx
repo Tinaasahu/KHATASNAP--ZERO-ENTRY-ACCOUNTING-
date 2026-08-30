@@ -17,6 +17,7 @@ export default function ToastProvider({ children }) {
     success: (msg) => addToast(msg, 'success'),
     error: (msg) => addToast(msg, 'error'),
     warning: (msg) => addToast(msg, 'warning'),
+    warn: (msg) => addToast(msg, 'warning'),
     info: (msg) => addToast(msg, 'info')
   };
 

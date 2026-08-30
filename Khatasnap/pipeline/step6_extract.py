@@ -403,16 +403,44 @@ def _parse_row(row: list, col_map: dict) -> dict | None:
 
 
 def _parse_positional(row: list) -> dict | None:
-    name=""; nums=[]
-    for i,b in enumerate(row):
-        t=b["text"].strip()
-        if i==0 and re.match(r'^\d{1,3}\.?$',t): continue
-        if not name and len(t)>=2 and not re.match(r'^\d+\.?\d*$',t): name=t
-        elif re.search(r'\d',t): nums.append(t)
-    if not name or len(name)<2: return None
-    return {"name":name,"hsn":"","qty":int(_f(nums[0])) if nums else 0,
-            "unit":"","mrp":0,"rate":_f(nums[1]) if len(nums)>1 else 0,
-            "gst_percent":0,"amount":_f(nums[-1]) if len(nums)>2 else 0}
+    name_parts = []
+    nums = []
+    for i, b in enumerate(row):
+        t = b["text"].strip()
+        if not t:
+            continue
+        if i == 0 and re.match(r'^\d{1,3}\.?$', t):
+            continue
+        if re.search(r'^\d+(\.\d+)?$', t.replace(",", "")):
+            nums.append(t)
+        else:
+            name_parts.append(t)
+    name = " ".join(name_parts).strip()
+    if not name or len(name) < 2:
+        return None
+    if re.match(r'^(tax|gst|bill|inv|total|subtotal|date|phone|gstin|mr|m/s)', name, re.I):
+        return None
+
+    if len(nums) == 1:
+        val = _f(nums[0])
+        return {"name": name, "hsn": "", "qty": 1, "unit": "", "mrp": val, "rate": val, "gst_percent": 0, "amount": val}
+    elif len(nums) == 2:
+        n1, n2 = _f(nums[0]), _f(nums[1])
+        if n1.is_integer() and 1 <= n1 <= 100 and n2 >= 1:
+            qty = int(n1)
+            rate = n2
+            amount = round(qty * rate, 2)
+        else:
+            qty = 1
+            rate = n1
+            amount = n2
+        return {"name": name, "hsn": "", "qty": qty, "unit": "", "mrp": rate, "rate": rate, "gst_percent": 0, "amount": amount}
+    elif len(nums) >= 3:
+        qty = int(_f(nums[0])) if _f(nums[0]) > 0 else 1
+        rate = _f(nums[1])
+        amt = _f(nums[-1])
+        return {"name": name, "hsn": "", "qty": qty, "unit": "", "mrp": rate, "rate": rate, "gst_percent": 0, "amount": amt}
+    return {"name": name, "hsn": "", "qty": 1, "unit": "", "mrp": 0, "rate": 0, "gst_percent": 0, "amount": 0}
 
 
 def extract_gst_summary(summary_rows: list, item_total: float = 0) -> dict:

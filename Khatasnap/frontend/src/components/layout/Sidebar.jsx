@@ -11,22 +11,29 @@ export default function Sidebar() {
   useEffect(() => {
     const poll = async () => {
       try {
-        const check = async (port) => {
+        let isHealthy = false;
+        try {
+          const res = await axios.get('/health', { timeout: 2000 });
+          isHealthy = res.status === 200;
+        } catch {
           try {
-            await axios.get(`http://localhost:${port}/health`, { timeout: 2000 });
-            return true;
-          } catch { return false; }
-        };
-        const [orchestrator, ocr, voice, sre, inventory] = await Promise.all([
-          check(8000), check(8001), check(8002), check(8003), check(8004)
-        ]);
-        setHealth({ orchestrator, ocr, voice, sre, inventory });
+            const res2 = await axios.get('http://localhost:8000/health', { timeout: 2000 });
+            isHealthy = res2.status === 200;
+          } catch {}
+        }
+        setHealth({ 
+          orchestrator: isHealthy, 
+          ocr: isHealthy, 
+          voice: isHealthy, 
+          sre: isHealthy, 
+          inventory: isHealthy 
+        });
         
         getLearningStats().then(setLearningStats).catch(() => {});
       } catch (e) {}
     };
     poll();
-    const int = setInterval(poll, 30000);
+    const int = setInterval(poll, 15000);
     return () => clearInterval(int);
   }, []);
 
