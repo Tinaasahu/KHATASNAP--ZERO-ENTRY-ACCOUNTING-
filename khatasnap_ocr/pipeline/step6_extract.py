@@ -162,24 +162,28 @@ def _fuzzy_match_product(name: str, threshold: int = 75) -> str:
 
 HEADER_MAP = {
     "description":"desc","product":"desc","item":"desc","particulars":"desc","name":"desc",
+    "productname":"desc","itemdescription":"desc","descriptionofgoods":"desc","itemname":"desc","details":"desc",
     "hsn":"hsn","sac":"hsn","hsnsac":"hsn","hsncode":"hsn","hsnno":"hsn",
-    "qty":"qty","quantity":"qty","qnty":"qty","nos":"qty",
-    "pcs":"uom","uom":"uom","unit":"uom","pkg":"uom",
+    "batch":"batch","batchno":"batch","batchn":"batch","batchnumber":"batch","lot":"batch","lotno":"batch",
+    "mfg":"mfg","mfgdate":"mfg","mfd":"mfg",
+    "exp":"exp","expdate":"exp","expiry":"exp","expirydate":"exp","bestbefore":"exp",
+    "qty":"qty","quantity":"qty","qnty":"qty","nos":"qty","pcs":"uom",
+    "uom":"uom","unit":"uom","pkg":"uom","pack":"uom",
     "case":"case","free":"free","mrp":"mrp",
-    "rate":"rate","price":"rate",
+    "rate":"rate","price":"rate","rateamt":"rate","unitprice":"rate","cost":"rate",
     "scheme":"scheme","schm":"scheme","sch":"scheme",
     "schmrs":"scheme_amt","schmart":"scheme_amt",
-    "disc%":"disc_pct","dis%":"disc_pct",
+    "disc":"disc_pct","disc%":"disc_pct","dis%":"disc_pct","discount":"disc_pct","discpercent":"disc_pct",
     "discamt":"disc_amt","discrs":"disc_amt",
-    "taxablevalue":"taxable","taxableamt":"taxable",
-    "cgst%":"cgst_r","cgstrate":"cgst_r",
+    "taxablevalue":"taxable","taxableamt":"taxable","taxableamount":"taxable","taxableval":"taxable",
+    "cgst%":"cgst_r","cgstrate":"cgst_r","cgst":"cgst_r",
     "cgstamt":"cgst_a","cgstrs":"cgst_a",
-    "sgst%":"sgst_r","sgstrate":"sgst_r",
+    "sgst%":"sgst_r","sgstrate":"sgst_r","sgst":"sgst_r",
     "sgstamt":"sgst_a","sgstrs":"sgst_a",
-    "igst%":"igst_r","igstamt":"igst_a",
+    "igst%":"igst_r","igstamt":"igst_a","igst":"igst_r",
     "cess":"cess",
-    "gst%":"gst","tax%":"gst",
-    "netamount":"amount","amountrs":"amount","netamt":"amount","total":"amount",
+    "gst":"gst","gst%":"gst","tax%":"gst","tax":"gst","gstpercent":"gst","taxrate":"gst",
+    "amount":"amount","netamount":"amount","amountrs":"amount","netamt":"amount","total":"amount","totalamount":"amount","linetotal":"amount","value":"amount",
 }
 
 SUMMARY_KW = [
@@ -366,11 +370,19 @@ def _parse_row(row: list, col_map: dict) -> dict | None:
             assigned[role] = assigned.get(role,"") + sep + block["text"]
 
     name = assigned.get("desc","").strip()
-    if re.match(r'^\d{1,3}\.?$', name):
+    if not name or len(name) < 2 or re.match(r'^\d{1,3}\.?$', name):
+        name_parts = []
         for b in sorted(row, key=lambda b: b["bbox"]["x1"]):
             t = b["text"].strip()
-            if len(t)>=3 and not re.match(r'^\d+\.?\d*$',t): name=t; break
-    if not name or len(name) < 2: return None
+            if not t or re.match(r'^\d{1,3}\.?$', t):
+                continue
+            if not re.match(r'^\d+(\.\d+)?$', t.replace(",", "")):
+                if not re.match(r'^\d{4,8}$', t):
+                    name_parts.append(t)
+        name = " ".join(name_parts).strip()
+
+    if not name or len(name) < 2:
+        return None
 
     rate_v  = _f(assigned.get("rate",""))
     raw_amt = _f(assigned.get("amount",""))
@@ -393,12 +405,26 @@ def _parse_row(row: list, col_map: dict) -> dict | None:
         elif 0 < c <= 50: gv = c
 
     qty_v = int(_f(assigned.get("qty",""))) if assigned.get("qty") else 0
+    if qty_v == 0 and rate_v > 0 and amt_v > 0:
+        try:
+            calc_qty = round(amt_v / rate_v)
+            if 1 <= calc_qty <= 1000:
+                qty_v = int(calc_qty)
+        except Exception:
+            pass
+    if qty_v == 0:
+        qty_v = 1
+
+    batch_v = assigned.get("batch", "").strip()
+    exp_v = assigned.get("exp", "").strip()
+    disc_v = _f(assigned.get("disc_pct", assigned.get("disc_amt", "")))
 
     return {
         "name": name, "hsn": hsn,
         "qty": qty_v, "unit": unit.strip(),
         "mrp": _f(assigned.get("mrp","")),
         "rate": rate_v, "gst_percent": gv, "amount": amt_v,
+        "batch": batch_v, "expiry": exp_v, "discount": disc_v,
     }
 
 

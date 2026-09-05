@@ -6,12 +6,14 @@ import { uploadBill, confirmBill } from '../api/ocr';
 import { check } from '../api/sre';
 import { useSRE } from '../hooks/useSRE';
 import SREFlagList from '../components/sre/SREFlagList';
-import { UploadCloud, Plus, Trash2 } from 'lucide-react';
+import { UploadCloud, Plus, Trash2, Sparkles, FileText, Package } from 'lucide-react';
 import { buildBillPayload } from '../utils/contract';
 import Divider from '../components/ui/Divider';
 import { searchInventory } from '../api/inventory';
+import BillScannerModal from '../components/inventory/BillScannerModal';
 
 export default function OCRPage() {
+  const [activeTab, setActiveTab] = useState('bill2inventory'); // 'bill2inventory' | 'standard_ocr'
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -169,164 +171,218 @@ export default function OCRPage() {
   };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: ocrResult ? '1fr 1fr' : '1fr', gap: '32px' }}>
-      
-      <Card style={{ alignSelf: 'start' }}>
-        <h2 style={{ fontSize: '18px', fontWeight: '500', marginBottom: '16px' }}>Upload Bill</h2>
-        
-        <div 
-          onClick={() => fileInputRef.current?.click()}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      {/* Top Header Mode Switcher Tabs */}
+      <div style={{ display: 'flex', borderBottom: '2px solid var(--border)', gap: '8px' }}>
+        <button
+          onClick={() => setActiveTab('bill2inventory')}
           style={{
-            border: '2px dashed var(--border-strong)',
-            borderRadius: 'var(--radius-xl)',
-            padding: '48px 24px',
-            textAlign: 'center',
-            cursor: 'pointer',
-            backgroundColor: 'var(--surface-2)',
-            transition: 'all 150ms ease',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '12px'
+            display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px',
+            background: activeTab === 'bill2inventory' ? 'var(--surface)' : 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'bill2inventory' ? '3px solid #4F46E5' : '3px solid transparent',
+            color: activeTab === 'bill2inventory' ? '#4F46E5' : 'var(--text-secondary)',
+            fontWeight: activeTab === 'bill2inventory' ? '700' : '500',
+            fontSize: '15px', cursor: 'pointer', transition: 'all 0.2s ease',
+            borderRadius: '8px 8px 0 0'
           }}
         >
-           <UploadCloud size={48} color="var(--text-hint)" />
-           {file ? (
-             <div style={{ fontWeight: '500', color: 'var(--accent)' }}>{file.name}</div>
-           ) : (
-             <div style={{ fontWeight: '500', color: 'var(--text-secondary)' }}>Click or drag to select Image/PDF</div>
-           )}
-           <input type="file" ref={fileInputRef} onChange={handleFileChange} style={{ display: 'none' }} accept="image/*,application/pdf" />
-        </div>
+          <Sparkles size={18} color={activeTab === 'bill2inventory' ? '#4F46E5' : 'currentColor'} />
+          <span>⚡ Smart Bill2Inventory™ v2</span>
+          <span style={{ fontSize: '10px', background: 'linear-gradient(135deg, #6366F1, #8B5CF6)', color: '#fff', padding: '2px 6px', borderRadius: '8px', fontWeight: 700 }}>
+            Distributor & Stock Sync
+          </span>
+        </button>
 
-        {preview && (
-          <div style={{ marginTop: '16px', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-            <img src={preview} alt="Bill Preview" style={{ width: '100%', maxHeight: '300px', objectFit: 'contain', backgroundColor: '#f0f0f0' }} />
-          </div>
-        )}
+        <button
+          onClick={() => setActiveTab('standard_ocr')}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px',
+            background: activeTab === 'standard_ocr' ? 'var(--surface)' : 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'standard_ocr' ? '3px solid var(--accent)' : '3px solid transparent',
+            color: activeTab === 'standard_ocr' ? 'var(--accent)' : 'var(--text-secondary)',
+            fontWeight: activeTab === 'standard_ocr' ? '700' : '500',
+            fontSize: '15px', cursor: 'pointer', transition: 'all 0.2s ease',
+            borderRadius: '8px 8px 0 0'
+          }}
+        >
+          <FileText size={18} />
+          <span>📄 Standard Bill OCR</span>
+        </button>
+      </div>
 
-        {file && (
-          <Button loading={loading} onClick={handleExtract} style={{ width: '100%', marginTop: '24px' }}>
-            Extract Bill Data
-          </Button>
-        )}
-      </Card>
+      {/* Tab 1: Smart Bill2Inventory v2 */}
+      {activeTab === 'bill2inventory' && (
+        <BillScannerModal
+          inline={true}
+          onSuccess={() => toast.success('Inventory stock updated from distributor bill!')}
+        />
+      )}
 
-      {ocrResult && (
-        <Card shadow style={{ alignSelf: 'start' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-             <h2 style={{ fontSize: '18px', fontWeight: '500' }}>Extraction Results</h2>
-             <Button variant="ghost" size="sm" onClick={() => setShowRaw(!showRaw)}>{showRaw ? 'Hide Raw' : 'Show Raw OCR'}</Button>
-          </div>
-
-          {showRaw && ocrResult.raw_data && (
-            <div style={{ backgroundColor: 'var(--bg)', padding: '12px', borderRadius: 'var(--radius-md)', fontFamily: 'monospace', fontSize: '12px', marginBottom: '16px', maxHeight: '150px', overflowY: 'auto' }}>
-              {JSON.stringify(ocrResult.raw_data, null, 2)}
-            </div>
-          )}
-
-          <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
-            <div style={{ flex: 1 }}>
-               <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Vendor</label>
-               <input style={{ width: '100%', padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} value={formData.vendor_name} onChange={e => setFormData({...formData, vendor_name: e.target.value})} />
-            </div>
-            <div style={{ flex: 1 }}>
-               <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Date</label>
-               <input type="date" style={{ width: '100%', padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} value={formData.invoice_date} onChange={e => setFormData({...formData, invoice_date: e.target.value})} />
-            </div>
-          </div>
-
-          <h3 style={{ fontSize: '14px', fontWeight: '500', marginBottom: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>Line Items</h3>
+      {/* Tab 2: Standard Bill OCR */}
+      {activeTab === 'standard_ocr' && (
+        <div style={{ display: 'grid', gridTemplateColumns: ocrResult ? '1fr 1fr' : '1fr', gap: '32px' }}>
           
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-             {formData.items.map((item, idx) => (
-                <div key={idx} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '10px', background: 'var(--surface)' }}>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                    <input style={{ flex: 2, padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} value={item.name} onChange={e => handleUpdateItem(idx, 'name', e.target.value)} />
-                    <input type="number" style={{ flex: 1, padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} value={item.qty} onChange={e => handleUpdateItem(idx, 'qty', Number(e.target.value))} />
-                    <input type="number" style={{ flex: 1, padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} value={item.price} onChange={e => handleUpdateItem(idx, 'price', Number(e.target.value))} />
-                    <Button variant="ghost" size="sm" onClick={() => {
-                      setFormData(prev => ({ ...prev, items: prev.items.filter((_, i) => i !== idx) }));
-                    }}><Trash2 size={16} color="var(--danger)" /></Button>
-                  </div>
+          <Card style={{ alignSelf: 'start' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: '500', marginBottom: '16px' }}>Upload Bill</h2>
+            
+            <div 
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: '2px dashed var(--border-strong)',
+                borderRadius: 'var(--radius-xl)',
+                padding: '48px 24px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                backgroundColor: 'var(--surface-2)',
+                transition: 'all 150ms ease',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '12px'
+              }}
+            >
+               <UploadCloud size={48} color="var(--text-hint)" />
+               {file ? (
+                 <div style={{ fontWeight: '500', color: 'var(--accent)' }}>{file.name}</div>
+               ) : (
+                 <div style={{ fontWeight: '500', color: 'var(--text-secondary)' }}>Click or drag to select Image/PDF</div>
+               )}
+               <input type="file" ref={fileInputRef} onChange={handleFileChange} style={{ display: 'none' }} accept="image/*,application/pdf" />
+            </div>
 
-                  {(item.needs_user_selection || item.match_status === 'ambiguous' || item.match_status === 'needs_selection') && !item.product_id && (
-                    <div style={{ marginTop: '10px', padding: '10px', borderRadius: 'var(--radius-md)', background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'baseline', marginBottom: '8px' }}>
-                        <div style={{ fontSize: '12px', fontWeight: 700 }}>Variant selection required</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-hint)' }}>{item.variant ? `OCR: ${item.variant}` : 'OCR: variant unclear'}</div>
-                      </div>
+            {preview && (
+              <div style={{ marginTop: '16px', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+                <img src={preview} alt="Bill Preview" style={{ width: '100%', maxHeight: '300px', objectFit: 'contain', backgroundColor: '#f0f0f0' }} />
+              </div>
+            )}
 
-                      {(item.match_candidates || []).length > 0 && (
-                        <div style={{ display: 'grid', gap: '6px', marginBottom: '10px' }}>
-                          {(item.match_candidates || []).map((c) => (
-                            <button
-                              key={c.id}
-                              onClick={() => pickCandidate(idx, c)}
-                              style={{ textAlign: 'left', padding: '8px 10px', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer' }}
-                            >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
-                                <div style={{ fontSize: '12px', fontWeight: 800 }}>
-                                  {c.emoji || '📦'} {c.name}{c.variant_label ? ` • ${c.variant_label}` : ''}
-                                </div>
-                                <div style={{ fontSize: '12px', fontWeight: 800 }}>₹{Number(c.selling_price || 0).toFixed(2)}</div>
-                              </div>
-                              <div style={{ fontSize: '11px', color: 'var(--text-hint)' }}>score: {c.score}</div>
-                            </button>
-                          ))}
-                        </div>
-                      )}
+            {file && (
+              <Button loading={loading} onClick={handleExtract} style={{ width: '100%', marginTop: '24px' }}>
+                Extract Bill Data
+              </Button>
+            )}
+          </Card>
 
+          {ocrResult && (
+            <Card shadow style={{ alignSelf: 'start' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                 <h2 style={{ fontSize: '18px', fontWeight: '500' }}>Extraction Results</h2>
+                 <Button variant="ghost" size="sm" onClick={() => setShowRaw(!showRaw)}>{showRaw ? 'Hide Raw' : 'Show Raw OCR'}</Button>
+              </div>
+
+              {showRaw && ocrResult.raw_data && (
+                <div style={{ backgroundColor: 'var(--bg)', padding: '12px', borderRadius: 'var(--radius-md)', fontFamily: 'monospace', fontSize: '12px', marginBottom: '16px', maxHeight: '150px', overflowY: 'auto' }}>
+                  {JSON.stringify(ocrResult.raw_data, null, 2)}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
+                <div style={{ flex: 1 }}>
+                   <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Vendor</label>
+                   <input style={{ width: '100%', padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} value={formData.vendor_name} onChange={e => setFormData({...formData, vendor_name: e.target.value})} />
+                </div>
+                <div style={{ flex: 1 }}>
+                   <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Date</label>
+                   <input type="date" style={{ width: '100%', padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} value={formData.invoice_date} onChange={e => setFormData({...formData, invoice_date: e.target.value})} />
+                </div>
+              </div>
+
+              <h3 style={{ fontSize: '14px', fontWeight: '500', marginBottom: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>Line Items</h3>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+                 {formData.items.map((item, idx) => (
+                    <div key={idx} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '10px', background: 'var(--surface)' }}>
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <input
-                          placeholder="Search inventory (name/barcode)..."
-                          value={searchQ[idx] || ''}
-                          onChange={(e) => runSearch(idx, e.target.value)}
-                          style={{ flex: 1, padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}
-                        />
-                        <div style={{ fontSize: '11px', color: 'var(--text-hint)' }}>
-                          {searchingIdx === idx ? 'Searching…' : ''}
-                        </div>
+                        <input style={{ flex: 2, padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} value={item.name} onChange={e => handleUpdateItem(idx, 'name', e.target.value)} />
+                        <input type="number" style={{ flex: 1, padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} value={item.qty} onChange={e => handleUpdateItem(idx, 'qty', Number(e.target.value))} />
+                        <input type="number" style={{ flex: 1, padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} value={item.price} onChange={e => handleUpdateItem(idx, 'price', Number(e.target.value))} />
+                        <Button variant="ghost" size="sm" onClick={() => {
+                          setFormData(prev => ({ ...prev, items: prev.items.filter((_, i) => i !== idx) }));
+                        }}><Trash2 size={16} color="var(--danger)" /></Button>
                       </div>
 
-                      {(searchResults[idx] || []).length > 0 && (
-                        <div style={{ marginTop: '8px', display: 'grid', gap: '6px' }}>
-                          {(searchResults[idx] || []).map((r) => (
-                            <button
-                              key={r.id}
-                              onClick={() => pickCandidate(idx, { id: r.id, name: r.name, emoji: r.emoji, selling_price: r.price, variant_label: '' })}
-                              style={{ textAlign: 'left', padding: '8px 10px', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer' }}
-                            >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
-                                <div style={{ fontSize: '12px', fontWeight: 800 }}>{r.emoji || '📦'} {r.name}</div>
-                                <div style={{ fontSize: '12px', fontWeight: 800 }}>Stock: {r.quantity}</div>
-                              </div>
-                            </button>
-                          ))}
+                      {(item.needs_user_selection || item.match_status === 'ambiguous' || item.match_status === 'needs_selection') && !item.product_id && (
+                        <div style={{ marginTop: '10px', padding: '10px', borderRadius: 'var(--radius-md)', background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'baseline', marginBottom: '8px' }}>
+                            <div style={{ fontSize: '12px', fontWeight: 700 }}>Variant selection required</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-hint)' }}>{item.variant ? `OCR: ${item.variant}` : 'OCR: variant unclear'}</div>
+                          </div>
+
+                          {(item.match_candidates || []).length > 0 && (
+                            <div style={{ display: 'grid', gap: '6px', marginBottom: '10px' }}>
+                              {(item.match_candidates || []).map((c) => (
+                                <button
+                                  key={c.id}
+                                  onClick={() => pickCandidate(idx, c)}
+                                  style={{ textAlign: 'left', padding: '8px 10px', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer' }}
+                                >
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+                                    <div style={{ fontSize: '12px', fontWeight: 800 }}>
+                                      {c.emoji || '📦'} {c.name}{c.variant_label ? ` • ${c.variant_label}` : ''}
+                                    </div>
+                                    <div style={{ fontSize: '12px', fontWeight: 800 }}>₹{Number(c.selling_price || 0).toFixed(2)}</div>
+                                  </div>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-hint)' }}>score: {c.score}</div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <input
+                              placeholder="Search inventory (name/barcode)..."
+                              value={searchQ[idx] || ''}
+                              onChange={(e) => runSearch(idx, e.target.value)}
+                              style={{ flex: 1, padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}
+                            />
+                            <div style={{ fontSize: '11px', color: 'var(--text-hint)' }}>
+                              {searchingIdx === idx ? 'Searching…' : ''}
+                            </div>
+                          </div>
+
+                          {(searchResults[idx] || []).length > 0 && (
+                            <div style={{ marginTop: '8px', display: 'grid', gap: '6px' }}>
+                              {(searchResults[idx] || []).map((r) => (
+                                <button
+                                  key={r.id}
+                                  onClick={() => pickCandidate(idx, { id: r.id, name: r.name, emoji: r.emoji, selling_price: r.price, variant_label: '' })}
+                                  style={{ textAlign: 'left', padding: '8px 10px', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer' }}
+                                >
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+                                    <div style={{ fontSize: '12px', fontWeight: 800 }}>{r.emoji || '📦'} {r.name}</div>
+                                    <div style={{ fontSize: '12px', fontWeight: 800 }}>Stock: {r.quantity}</div>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
-                  )}
-                </div>
-             ))}
-             <Button variant="ghost" size="sm" onClick={() => {
-                setFormData(prev => ({ ...prev, items: [...prev.items, { name: 'New Item', qty: 1, price: 0 }]}));
-             }} style={{ alignSelf: 'flex-start' }}><Plus size={16}/> Add Row</Button>
-          </div>
+                 ))}
+                 <Button variant="ghost" size="sm" onClick={() => {
+                    setFormData(prev => ({ ...prev, items: [...prev.items, { name: 'New Item', qty: 1, price: 0 }]}));
+                 }} style={{ alignSelf: 'flex-start' }}><Plus size={16}/> Add Row</Button>
+              </div>
 
-          <Divider />
+              <Divider />
 
-          <div style={{ marginBottom: '24px' }}>
-            <h3 style={{ fontSize: '12px', color: 'var(--text-hint)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>Smart Checks</h3>
-            <SREFlagList flags={flags} onResolve={resolveFlag} />
-          </div>
+              <div style={{ marginBottom: '24px' }}>
+                <h3 style={{ fontSize: '12px', color: 'var(--text-hint)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>Smart Checks</h3>
+                <SREFlagList flags={flags} onResolve={resolveFlag} />
+              </div>
 
-          <Button loading={saving} disabled={!areAllResolved() || hasUnresolvedVariants()} onClick={handleConfirm} style={{ width: '100%' }}>
-            Confirm & Save
-          </Button>
+              <Button loading={saving} disabled={!areAllResolved() || hasUnresolvedVariants()} onClick={handleConfirm} style={{ width: '100%' }}>
+                Confirm & Save
+              </Button>
 
-        </Card>
+            </Card>
+          )}
+        </div>
       )}
     </div>
   );
 }
+

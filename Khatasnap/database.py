@@ -20,6 +20,14 @@ def init_db():
     conn = get_conn()
     cur  = conn.cursor()
 
+    # Migration for ocr_corrections columns
+    for col in ['incorrect_value', 'correct_value', 'vendor', 'invoice_layout']:
+        try:
+            conn.execute(f"ALTER TABLE ocr_corrections ADD COLUMN {col} TEXT;")
+        except Exception:
+            pass
+    conn.commit()
+
     cur.executescript("""
         CREATE TABLE IF NOT EXISTS categories (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,15 +79,30 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS ocr_corrections (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            norm_text     TEXT NOT NULL,
+            norm_text     TEXT,
+            incorrect_value TEXT,
+            correct_value   TEXT,
+            vendor          TEXT,
+            invoice_layout  TEXT,
             product_id    INTEGER REFERENCES products(id) ON DELETE SET NULL,
             variant_group_id TEXT,
             variant_label TEXT,
             times_used    INTEGER DEFAULT 1,
             last_used_at  TEXT DEFAULT (datetime('now')),
-            created_at    TEXT DEFAULT (datetime('now')),
-            UNIQUE(norm_text, product_id)
+            created_at    TEXT DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS vendor_layout_memory (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            vendor_name      TEXT NOT NULL,
+            gstin            TEXT,
+            layout_template  TEXT NOT NULL,
+            column_positions TEXT NOT NULL,
+            confidence       REAL DEFAULT 1.0,
+            last_used        TEXT DEFAULT (datetime('now')),
+            created_at       TEXT DEFAULT (datetime('now'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_vendor_layout_memory_vendor_gstin ON vendor_layout_memory(vendor_name, gstin);
 
         CREATE TABLE IF NOT EXISTS reconciliation_flags (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,

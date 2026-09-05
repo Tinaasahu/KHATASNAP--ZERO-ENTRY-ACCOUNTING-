@@ -500,10 +500,11 @@ def _run_easyocr(image: np.ndarray) -> list[dict]:
 
     # Tesseract fallback
     try:
-        import pytesseract
+        import pytesseract, shutil
         from PIL import Image
-        for cand_path in ["/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract", "/usr/bin/tesseract", "tesseract"]:
-            if os.path.exists(cand_path):
+        tess_path = shutil.which("tesseract")
+        for cand_path in ["/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract", "/usr/bin/tesseract", tess_path]:
+            if cand_path and os.path.exists(cand_path):
                 pytesseract.pytesseract.tesseract_cmd = cand_path
                 break
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) if image.ndim == 3 else image
@@ -524,15 +525,8 @@ def _run_easyocr(image: np.ndarray) -> list[dict]:
     except Exception as t_err:
         logger.warning(f"Tesseract unavailable: {t_err}")
 
-    # Ultimate fallback: return non-empty structure if bill lines detected
-    return [
-        _mk("INVOICE", 0.95, [20, 100], [20, 36]),
-        _mk("Sample Item", 0.85, [20, 150], [50, 66]),
-        _mk("1", 0.9, [200, 220], [50, 66]),
-        _mk("50", 0.9, [280, 310], [50, 66]),
-        _mk("Total", 0.95, [20, 80], [100, 116]),
-        _mk("50", 0.95, [280, 310], [100, 116]),
-    ]
+    return []
+
 
 
 def _blocks_from_dict(r: dict) -> list[dict]:

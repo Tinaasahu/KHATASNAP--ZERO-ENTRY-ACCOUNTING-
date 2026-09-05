@@ -16,3 +16,15 @@ export const bulkUpdateProducts = (ids, fields) =>
 
 export const getInventoryAlerts = (days = 30) =>
   client.get(`/api/inventory/alerts?days=${days}`).then(res => res.data.data);
+
+export const scanDistributorBill = (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  return client.post('/api/inventory/scan-bill', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(res => res.data);
+};
+
+export const confirmBillInventoryUpdate = (payload) =>
+  client.post('/api/inventory/confirm-bill-update', payload).then(res => res.data);
+

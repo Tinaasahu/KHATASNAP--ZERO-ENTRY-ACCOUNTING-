@@ -10,6 +10,16 @@ export const predictItem = (price, hour, day, cart_item_ids = [], asr_transcript
     .then(res => res.data.data);
 };
 
+export const predictConfidence = (price, asr_transcript = '', hour = null) => {
+  return client.post('/api/calculator/predict-confidence', { price, asr_transcript, hour })
+    .then(res => res.data.data || res.data);
+};
+
+export const recordFeedback = (product_id, product_name, price, hour = null, day = null) => {
+  return client.post('/api/calculator/record-feedback', { product_id, product_name, price, hour, day })
+    .then(res => res.data.data || res.data);
+};
+
 export const selectItem = (price, item_id, item_name, hour, day) => {
   return client.post('/api/calculator/select-item', { price, item_id, item_name, hour, day })
     .then(res => res.data.data);

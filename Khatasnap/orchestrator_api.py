@@ -34,8 +34,12 @@ VOICE_URL     = os.getenv("VOICE_SERVICE_URL",     "http://127.0.0.1:8002")
 SRE_URL       = os.getenv("SRE_SERVICE_URL",       "http://127.0.0.1:8003")
 INVENTORY_URL = os.getenv("INVENTORY_SERVICE_URL", "http://127.0.0.1:8004")
 
-# ── Database ─────────────────────────────────────────────────────────────────
 from database import init_db, get_conn
+from confidence_engine import ExplainableConfidenceEngine
+from bill2inventory_engine import Bill2InventoryEngine
+
+explainable_confidence_engine = ExplainableConfidenceEngine()
+bill2inventory_engine = Bill2InventoryEngine()
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -1411,94 +1415,25 @@ async def voice_transcribe(request: Request):
 async def voice_inventory_parse(request: Request):
     """
     Parse add/deduct/remove inventory commands (preview only; confirm applies via /api/inventory/update).
-    Matches Flask app.py /api/voice/inventory behaviour.
+    Uses smart Hinglish & multi-keyword voice command parser.
     """
     body = await request.json()
     raw = (body.get("transcript") or "").strip()
     if not raw:
         return _err("Transcript is required")
 
-    from helpers import fuzzy_match, normalize
-
-    transcript = normalize(raw)
-
-    ADD_KEYWORDS = [
-        "add", "stock in", "restock", "received", "purchase",
-        "jodo", "daalo", "laya", "aaya",
-    ]
-    DEDUCT_KEYWORDS = [
-        "deduct", "remove", "sell", "sold", "reduce", "minus",
-        "hatao", "kam karo", "nikalo", "gaya", "bika",
-    ]
-
-    action = None
-    for kw in ADD_KEYWORDS:
-        if kw in transcript:
-            action = "add"
-            break
-    if action is None:
-        for kw in DEDUCT_KEYWORDS:
-            if kw in transcript:
-                action = "deduct"
-                break
-
-    if action is None:
-        return _err('No action detected. Say "add" or "deduct/remove".', 422)
-
-    quantity_words = {
-        "ek": 1, "do": 2, "teen": 3, "char": 4, "paanch": 5,
-        "chhe": 6, "saat": 7, "aath": 8, "nau": 9, "das": 10,
-        "bees": 20, "tees": 30, "chalis": 40, "pachas": 50,
-        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-        "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20,
-        "thirty": 30, "forty": 40, "fifty": 50, "hundred": 100,
-        "half": 0.5, "couple": 2, "dozen": 12,
-    }
-
-    words = transcript.split()
-    parsed_qty = 1
-    for i, w in enumerate(words):
-        if w.isdigit():
-            parsed_qty = int(w)
-            break
-        if w in quantity_words:
-            parsed_qty = quantity_words[w]
-            break
+    from helpers import parse_inventory_voice_command
 
     conn = get_conn()
     products = _products_with_aliases(conn)
-
-    best_match = None
-    best_conf = 0.0
-    for p in products:
-        matched, conf = fuzzy_match(transcript, [p], min_confidence=0.45)
-        if matched and conf > best_conf:
-            best_match = matched
-            best_conf = conf
-
-    if not best_match:
-        conn.close()
-        return _err("No matching product found in inventory.", 404)
-
-    row = conn.execute(
-        "SELECT current_qty FROM products WHERE id=?", (best_match["id"],)
-    ).fetchone()
-    current_qty = row["current_qty"] if row else 0
     conn.close()
 
-    new_qty = (current_qty + parsed_qty) if action == "add" else max(0, current_qty - parsed_qty)
+    parsed_items = parse_inventory_voice_command(raw, products)
+    if not parsed_items:
+        return _err("No matching product found in inventory or command unrecognised.", 404)
 
     return _ok({
-        "items": [{
-            "action": action,
-            "product_id": best_match["id"],
-            "product_name": best_match["name"],
-            "qty": parsed_qty,
-            "current_qty": current_qty,
-            "new_qty": new_qty,
-            "confidence": round(best_conf, 3),
-        }]
+        "items": parsed_items
     })
 
 
@@ -1570,6 +1505,50 @@ async def resolve_price(request: Request):
         "confidence": best.get("confidence", 0) if best else 0
     })
 
+@app.post("/api/calculator/predict-confidence")
+async def predict_confidence_api(request: Request):
+    """
+    Explainable Smart Reconciliation Confidence Score prediction endpoint.
+    Accepts price, asr_transcript, and optional hour.
+    Returns exact JSON schema required by Master Spec.
+    """
+    body = await request.json()
+    price = body.get("price", 0)
+    asr_transcript = body.get("asr_transcript", "")
+    hour = body.get("hour")
+
+    result = explainable_confidence_engine.predict(
+        entered_price=price,
+        asr_transcript=asr_transcript,
+        current_hour=hour
+    )
+    return JSONResponse(result)
+
+@app.post("/api/calculator/record-feedback")
+async def record_feedback_api(request: Request):
+    """
+    Learning Feedback endpoint: Updates historical sales/time statistics when user confirms
+    or selects a product.
+    """
+    body = await request.json()
+    product_id = body.get("product_id") or body.get("item_id")
+    product_name = body.get("product_name") or body.get("name", "")
+    price = body.get("price", 0)
+    hour = body.get("hour")
+    day = body.get("day")
+
+    if not product_id:
+        return _err("product_id is required")
+
+    success = explainable_confidence_engine.record_feedback(
+        product_id=product_id,
+        product_name=product_name,
+        price=price,
+        hour=hour,
+        day=day
+    )
+    return _ok({"status": "recorded" if success else "failed"})
+
 @app.post("/api/calculator/predict-item")
 async def predict_item_api(request: Request):
     """Real-time parallel prediction endpoint for live speech + keypad inputs."""
@@ -1587,6 +1566,16 @@ async def predict_item_api(request: Request):
         active_cart_item_ids=cart_item_ids,
         asr_transcript=asr_transcript
     )
+
+    # Attach explainable prediction result
+    exp_pred = explainable_confidence_engine.predict(
+        entered_price=price,
+        asr_transcript=asr_transcript,
+        current_hour=hour
+    )
+    if isinstance(pred, dict):
+        pred["explainable"] = exp_pred
+
     return _ok(pred)
 
 @app.post("/api/calculator/select-item")
@@ -1601,6 +1590,15 @@ async def select_item(request: Request):
         "item_name": body["item_name"],
         "price": body["price"]
     }], hour=body.get("hour"), day=body.get("day"))
+    
+    # Silently update explainable feedback as well
+    explainable_confidence_engine.record_feedback(
+        product_id=body["item_id"],
+        product_name=body["item_name"],
+        price=body["price"],
+        hour=body.get("hour"),
+        day=body.get("day")
+    )
     return _ok({"status": "recorded"})
 
 @app.post("/api/calculator/submit-session")
@@ -2243,6 +2241,29 @@ async def inventory_alerts(days: int = 30):
     ).fetchall()
     conn.close()
     return _ok({"low_stock": [dict(r) for r in low], "expiring_soon": [dict(r) for r in exp], "window_days": days})
+
+
+@app.post("/api/inventory/scan-bill")
+async def scan_distributor_bill_api(file: UploadFile = File(...)):
+    """
+    Smart Bill2Inventory™ v2 endpoint.
+    Accepts image (JPG, PNG, HEIC) or PDF distributor invoice and returns 8-layer AI prediction JSON.
+    """
+    contents = await file.read()
+    result = bill2inventory_engine.scan_bill(contents, file.filename or "invoice.jpg")
+    return JSONResponse(result)
+
+
+@app.post("/api/inventory/confirm-bill-update")
+async def confirm_bill_update_api(request: Request):
+    """
+    Commits inventory updates, weighted average purchase prices, batch, expiry, and stock logs atomically.
+    """
+    body = await request.json()
+    result = bill2inventory_engine.confirm_bill_update(body)
+    if not result.get("success", False):
+        return _err(result.get("error", "Transaction failed"), 400)
+    return _ok(result.get("data", {}))
 
 
 @app.post("/api/inventory/update")

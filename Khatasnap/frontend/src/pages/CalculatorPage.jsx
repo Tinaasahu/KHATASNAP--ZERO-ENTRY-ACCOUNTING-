@@ -136,18 +136,16 @@ export default function CalculatorPage() {
   const voice = useVoice();
   const toast = useToast();
 
-  // ── Confidence decision state (shown after = is pressed) ──────────────
-  const [confidenceResult, setConfidenceResult]   = useState(null);  // null | { score, decision, matched_items, ... }
-  const [showConfidenceCard, setShowConfidenceCard] = useState(false);
-  const [pendingCommitData, setPendingCommitData]   = useState(null);
-
-  // ── Day Mode (Continuous Background AI Listening) ─────────────────────
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [isDayMode, setIsDayMode] = useState(() => {
     return localStorage.getItem('khatasnap_day_mode') === 'true';
   });
 
   // ── Live pattern prediction for currently typed operand ───────────────
   const [livePrediction, setLivePrediction] = useState(null);
+  const [explainablePrediction, setExplainablePrediction] = useState(null);
+  const [confidenceResult, setConfidenceResult] = useState(null);
+  const [showConfidenceCard, setShowConfidenceCard] = useState(false);
 
   // ── Buffer hook wires ASR + amounts → confidence engine ───────────────
   const txBuffer = useTransactionBuffer();
@@ -159,7 +157,6 @@ export default function CalculatorPage() {
 
   const passive = usePassiveASR({ onSegment: handleAsrSegment });
   const [inventory, setInventory] = useState([]);
-  const newItemInputRef = useRef(null);
 
   // Auto-start Day Mode ASR on mount if enabled
   useEffect(() => {
@@ -172,6 +169,7 @@ export default function CalculatorPage() {
   useEffect(() => {
     if (!currentOperand || isNaN(parseInt(currentOperand, 10))) {
       setLivePrediction(null);
+      setExplainablePrediction(null);
       return;
     }
     const timer = setTimeout(async () => {
@@ -186,6 +184,17 @@ export default function CalculatorPage() {
         }
       } catch {
         setLivePrediction(null);
+      }
+
+      try {
+        const exp = await predictConfidence(val, passive.getBuffer(), new Date().getHours());
+        if (exp && exp.prediction && exp.prediction.confidence > 0) {
+          setExplainablePrediction(exp);
+        } else {
+          setExplainablePrediction(null);
+        }
+      } catch {
+        setExplainablePrediction(null);
       }
     }, 150);
     return () => clearTimeout(timer);
@@ -368,7 +377,8 @@ export default function CalculatorPage() {
 
        if (currentTranscript && inventory.length > 0) {
           const mentions = extractItemMentions(currentTranscript, inventory);
-          const directMatch = mentions.find(m => m.price === price);
+          // Stage 2 Price Match: Prioritize exact or within price tolerance matches
+          const directMatch = mentions.find(m => Math.abs((m.price || 0) - price) <= 2);
           if (directMatch) {
              speechItem = directMatch;
              speechConfidence = 0.95;
@@ -381,11 +391,21 @@ export default function CalculatorPage() {
                 speechConfidence = 0.90;
                 speechReason = `Voice: "${compositeMatch.item_name}" (${price / compositeMatch.price}x ₹${compositeMatch.price})`;
              } else if (mentions.length > 0) {
-                // Spoken item keyword match with custom entered price override
-                const keywordMatch = mentions[0];
-                speechItem = { ...keywordMatch, calc_qty: 1 };
-                speechConfidence = 0.85;
-                speechReason = `Voice: "${keywordMatch.item_name}" heard @ entered ₹${price}`;
+                // Pick candidate closest to entered price
+                let bestCand = mentions[0];
+                let minDiff = Math.abs((bestCand.price || 0) - price);
+                for (const m of mentions) {
+                   const diff = Math.abs((m.price || 0) - price);
+                   if (diff < minDiff) {
+                      minDiff = diff;
+                      bestCand = m;
+                   }
+                }
+                if (minDiff <= 5) {
+                   speechItem = { ...bestCand, calc_qty: 1 };
+                   speechConfidence = 0.85;
+                   speechReason = `Voice: "${bestCand.item_name}" heard @ entered ₹${price}`;
+                }
              }
           }
        }
@@ -1096,7 +1116,7 @@ export default function CalculatorPage() {
             </div>
 
             {/* Live Multimodal AI Pattern Prediction Preview */}
-            {currentOperand && livePrediction && (
+            {currentOperand && livePrediction && !explainablePrediction && (
               <motion.div
                 initial={{ opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1117,6 +1137,38 @@ export default function CalculatorPage() {
                   {Math.round(livePrediction.confidence * 100)}% Match
                 </span>
               </motion.div>
+            )}
+
+            {/* Premium Explainable Confidence Score Card */}
+            {currentOperand && explainablePrediction && (
+              <ConfidenceScoreCard
+                predictionResult={explainablePrediction}
+                enteredPrice={currentOperand}
+                onConfirmPrediction={async (pred) => {
+                  if (pred && pred.id) {
+                    const val = parseInt(currentOperand, 10);
+                    try {
+                      await selectItem(val, pred.id, pred.name, new Date().getHours(), new Date().getDay());
+                      await recordFeedback(pred.id, pred.name, val, new Date().getHours(), new Date().getDay());
+                      toast.success(`Confirmed ${pred.name} for ₹${val}`);
+                    } catch {
+                      toast.info(`Selected ${pred.name}`);
+                    }
+                  }
+                }}
+                onSelectAlternative={async (alt) => {
+                  if (alt && alt.id) {
+                    const val = parseInt(currentOperand, 10);
+                    try {
+                      await selectItem(val, alt.id, alt.name, new Date().getHours(), new Date().getDay());
+                      await recordFeedback(alt.id, alt.name, val, new Date().getHours(), new Date().getDay());
+                      toast.info(`Selected ${alt.name} for ₹${val}`);
+                    } catch {
+                      toast.info(`Selected ${alt.name}`);
+                    }
+                  }
+                }}
+              />
             )}
 
             <div style={{ fontFamily: 'var(--mono)', fontSize: '13px', color: 'var(--text-hint)', marginTop: '16px', textAlign: 'right' }}>

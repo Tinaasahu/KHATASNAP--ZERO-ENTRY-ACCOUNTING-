@@ -29,7 +29,12 @@ except ImportError:
                     return response
 
 from database import get_conn, init_db
-from helpers  import generate_sku, generate_txn_id, generate_bill_no, fuzzy_match, normalize
+from helpers  import generate_sku, generate_txn_id, generate_bill_no, fuzzy_match, normalize, parse_inventory_voice_command
+from confidence_engine import ExplainableConfidenceEngine
+from bill2inventory_engine import Bill2InventoryEngine
+
+explainable_confidence_engine = ExplainableConfidenceEngine()
+bill2inventory_engine = Bill2InventoryEngine()
 
 # ── SRE engine (unchanged from original) ─────────────────────────────────────
 from sre_engine import (
@@ -498,6 +503,23 @@ def stock_adjust():
 # INVENTORY READ APIs  (used by mobile frontend)
 # ══════════════════════════════════════════════════════════════════════════════
 
+@app.route('/api/inventory/scan-bill', methods=['POST'])
+def scan_distributor_bill_flask():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+    file = request.files['file']
+    contents = file.read()
+    result = bill2inventory_engine.scan_bill(contents, file.filename or 'invoice.jpg')
+    return jsonify(result)
+
+@app.route('/api/inventory/confirm-bill-update', methods=['POST'])
+def confirm_bill_update_flask():
+    body = request.json or {}
+    result = bill2inventory_engine.confirm_bill_update(body)
+    if not result.get('success', False):
+        return jsonify({'error': result.get('error', 'Transaction failed')}), 400
+    return jsonify({'success': True, 'data': result.get('data', {})})
+
 @app.route('/api/inventory', methods=['GET'])
 def get_inventory():
     conn = db(); cur = conn.cursor()
@@ -872,106 +894,67 @@ def voice_transcribe_local():
         }
     })
 
+@app.route('/api/calculator/predict-confidence', methods=['POST'])
+def predict_confidence_flask():
+    data = request.json or {}
+    price = data.get('price', 0)
+    asr_transcript = data.get('asr_transcript', '')
+    hour = data.get('hour')
+
+    result = explainable_confidence_engine.predict(
+        entered_price=price,
+        asr_transcript=asr_transcript,
+        current_hour=hour
+    )
+    return jsonify(result)
+
+@app.route('/api/calculator/record-feedback', methods=['POST'])
+def record_feedback_flask():
+    data = request.json or {}
+    product_id = data.get('product_id') or data.get('item_id')
+    product_name = data.get('product_name') or data.get('name', '')
+    price = data.get('price', 0)
+    hour = data.get('hour')
+    day = data.get('day')
+
+    if not product_id:
+        return jsonify({'error': 'product_id is required'}), 400
+
+    success = explainable_confidence_engine.record_feedback(
+        product_id=product_id,
+        product_name=product_name,
+        price=price,
+        hour=hour,
+        day=day
+    )
+    return jsonify({'success': True, 'data': {'status': 'recorded' if success else 'failed'}})
+
 @app.route('/api/voice/inventory', methods=['POST'])
 def voice_inventory_parse():
     """
-    Parses an inventory voice command transcript.
+    Parses an inventory voice command transcript using smart Hinglish & action parser.
     Detects action (add / deduct / remove) + quantity + item name via fuzzy match.
     Returns a PREVIEW — does NOT apply stock changes yet.
     Frontend confirms via /api/stock/add or /api/stock/remove.
-
-    Example transcripts:
-      "add 10 rice"
-      "deduct 5 oil"
-      "remove three bottles water"
-      "add twenty kg sugar"
     """
     data = request.json or {}
-    transcript = normalize(data.get('transcript', ''))
-    if not transcript:
+    raw_transcript = data.get('transcript', '')
+    if not raw_transcript or not str(raw_transcript).strip():
         return jsonify({'error': 'No transcript provided'}), 400
 
-    # ── Detect action keyword ────────────────────────────────────────────────
-    ADD_KEYWORDS    = ['add', 'stock in', 'restock', 'received', 'purchase',
-                       'jodo', 'daalo', 'laya', 'aaya']
-    DEDUCT_KEYWORDS = ['deduct', 'remove', 'sell', 'sold', 'reduce', 'minus',
-                       'hatao', 'kam karo', 'nikalo', 'gaya', 'bika']
-
-    action = None
-    for kw in ADD_KEYWORDS:
-        if kw in transcript:
-            action = 'add'
-            break
-    if action is None:
-        for kw in DEDUCT_KEYWORDS:
-            if kw in transcript:
-                action = 'deduct'
-                break
-
-    if action is None:
-        return jsonify({'error': 'No action detected. Say "add" or "deduct/remove".'}), 422
-
-    # ── Quantity word map ────────────────────────────────────────────────────
-    quantity_words = {
-        'ek': 1, 'do': 2, 'teen': 3, 'char': 4, 'paanch': 5,
-        'chhe': 6, 'saat': 7, 'aath': 8, 'nau': 9, 'das': 10,
-        'bees': 20, 'tees': 30, 'chalis': 40, 'pachas': 50,
-        'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
-        'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
-        'eleven': 11, 'twelve': 12, 'fifteen': 15, 'twenty': 20,
-        'thirty': 30, 'forty': 40, 'fifty': 50, 'hundred': 100,
-        'half': 0.5, 'couple': 2, 'dozen': 12,
-    }
-
-    words = transcript.split()
-    parsed_qty = 1
-
-    # Try to extract a number (digit or word) from the transcript
-    for i, w in enumerate(words):
-        if w.isdigit():
-            parsed_qty = int(w)
-            break
-        if w in quantity_words:
-            parsed_qty = quantity_words[w]
-            break
-
-    # ── Fuzzy-match item name in transcript ──────────────────────────────────
     conn = db()
-    cur  = conn.cursor()
+    cur = conn.cursor()
     products = get_all_products_with_aliases(cur)
-
-    best_match = None
-    best_conf  = 0.0
-    for p in products:
-        matched, conf = fuzzy_match(transcript, [p], min_confidence=0.45)
-        if matched and conf > best_conf:
-            best_match = matched
-            best_conf  = conf
-
-    if not best_match:
-        cur.close(); conn.close()
-        return jsonify({'error': 'No matching product found in inventory.'}), 404
-
-    # Fetch current stock
-    cur.execute("SELECT current_qty FROM products WHERE id=?", (best_match['id'],))
-    row = cur.fetchone()
-    current_qty = row['current_qty'] if row else 0
     cur.close(); conn.close()
 
-    new_qty = (current_qty + parsed_qty) if action == 'add' else max(0, current_qty - parsed_qty)
+    parsed_items = parse_inventory_voice_command(raw_transcript, products)
+    if not parsed_items:
+        return jsonify({'error': 'No matching product found in inventory or command unrecognised.'}), 404
 
     return jsonify({
         'success': True,
         'data': {
-            'items': [{
-                'action':       action,
-                'product_id':   best_match['id'],
-                'product_name': best_match['name'],
-                'qty':          parsed_qty,
-                'current_qty':  current_qty,
-                'new_qty':      new_qty,
-                'confidence':   round(best_conf, 3),
-            }],
+            'items': parsed_items
         }
     })
 

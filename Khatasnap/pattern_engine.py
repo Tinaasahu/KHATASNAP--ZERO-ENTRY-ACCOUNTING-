@@ -1,11 +1,11 @@
 """
 KhataSnap — Pattern Recognition Engine
-Learns multidimensional patterns from shopkeeper transactions:
-1. Time-of-Day & Day-of-Week probability (Hour windows, Weekdays vs Weekends)
-2. Frequency & Recency weighting
-3. Market Basket Co-occurrence (Items frequently bought together)
-4. ASR Speech + Pattern Fusion (Speech cues boost pattern predictions)
-5. Stock-aware prioritization
+
+Determines item prediction based on FOUR (4) Core Constraints:
+1. ASR Keyword Matching (Highest Priority) — Matches spoken words like “milk”, “Parle G” with inventory names & aliases.
+2. Price + Inventory Validation — Finds products whose price matches AND are currently in stock.
+3. Sales Pattern Analysis — Prioritizes items that are historically sold more frequently.
+4. Time-based Behavior — Uses hour-of-day trends (e.g. milk: 8–10 AM, bread: morning, cold drinks: evening).
 """
 
 from __future__ import annotations
@@ -24,25 +24,124 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+import difflib
+
+
+def _phonetic_norm(text: str) -> str:
+    if not text:
+        return ""
+    t = text.lower()
+    # Normalize common Indian phonetic variations: w <-> v, aa <-> a, ee <-> i, oo <-> u, z <-> j
+    t = t.replace("w", "v").replace("ee", "i").replace("oo", "u").replace("aa", "a").replace("z", "j")
+    t = re.sub(r"[^\w\s]", "", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+HINGLISH_SYNONYMS = {
+    "doodh": "milk", "dudh": "milk", "milk": "milk",
+    "dahi": "curd", "curd": "curd",
+    "chini": "sugar", "suger": "sugar", "sugar": "sugar",
+    "namak": "salt", "salt": "salt",
+    "tel": "oil", "oil": "oil",
+    "makhan": "butter", "butter": "butter",
+    "chai": "tea", "tea": "tea",
+    "paani": "water", "water": "water",
+    "sabun": "soap", "soap": "soap",
+    "biscut": "biscuit", "biskut": "biscuit", "biscuit": "biscuit",
+    "colddrink": "cold drink", "coke": "cold drink", "pepsi": "cold drink", "sprite": "cold drink", "thumsup": "cold drink"
+}
+
+
 def _speech_keyword_match_score(name_norm: str, norm_speech: str) -> tuple[float, str]:
+    """
+    Constraint 1: ASR Keyword Matching (Highest Priority)
+    Supports phonetic normalization (e.g. Aashirvaad <-> aashirwaad), brand priority, and word coverage ratios.
+    """
     if not name_norm or not norm_speech:
         return 0.0, ""
 
-    if name_norm in norm_speech:
-        return 1.0, f'Voice: "{name_norm}" heard'
+    p_norm = _phonetic_norm(name_norm)
+    p_speech = _phonetic_norm(norm_speech)
 
-    words = [w for w in name_norm.split() if len(w) > 2 and w not in {"packet", "bottle", "piece", "gm", "kg", "ml", "l"}]
-    if not words:
+    # 1. Exact string or exact phonetic match
+    if p_norm == p_speech:
+        return 1.0, f'Voice: "{name_norm}" matched'
+
+    # 2. Hinglish Synonym match
+    for syn_key, syn_val in HINGLISH_SYNONYMS.items():
+        syn_p = _phonetic_norm(syn_key)
+        if syn_p == p_speech and syn_val in p_norm:
+            return 0.95, f'Voice: "{syn_key}" ({syn_val}) matched'
+
+    # 3. Token-based phonetic & fuzzy word coverage
+    ignore_words = {"packet", "bottle", "piece", "gm", "kg", "ml", "l", "pkt", "pcs"}
+    prod_words = [w for w in p_norm.split() if len(w) > 2 and w not in ignore_words]
+    speech_words = [w for w in p_speech.split() if len(w) > 2 and w not in ignore_words]
+
+    if not prod_words or not speech_words:
         return 0.0, ""
 
-    matching_words = [w for w in words if w in norm_speech]
-    if len(matching_words) == len(words):
-        return 1.0, f'Voice: "{name_norm}" heard'
-    elif len(matching_words) > 0:
-        matched_str = " ".join(matching_words)
-        return 0.85, f'Voice: "{matched_str}" heard'
+    matched_prod_words = []
+    matched_speech_words = set()
 
-    return 0.0, ""
+    for pw in prod_words:
+        for sw in speech_words:
+            if pw == sw or difflib.SequenceMatcher(None, pw, sw).ratio() >= 0.80:
+                matched_prod_words.append(pw)
+                matched_speech_words.add(sw)
+                break
+
+    if not matched_prod_words:
+        return 0.0, ""
+
+    # Coverage ratio of spoken query words matched by this product
+    speech_coverage = len(matched_speech_words) / len(speech_words)
+    product_coverage = len(matched_prod_words) / len(prod_words)
+
+    # Full speech coverage match (e.g. spoken "aashirwaad atta" -> product "Aashirvaad Atta" matches 100% of spoken words!)
+    if speech_coverage >= 0.90:
+        if product_coverage >= 0.80:
+            return 1.0, f'Voice: "{name_norm}" matched'
+        else:
+            return 0.90, f'Voice: "{name_norm}" matched'
+
+    # Partial speech coverage (e.g. spoken "aashirwaad atta" -> generic product "Atta" only matches 1 of 2 spoken words)
+    score = round(0.40 * product_coverage + 0.60 * speech_coverage, 2)
+    matched_str = " ".join(matched_prod_words)
+    return score, f'Voice: "{matched_str}" matched'
+
+
+
+
+def _get_time_of_day_info(hour: int, name_norm: str) -> tuple[float, str]:
+    """
+    Constraint 4: Time-based Behavior Domain Rules
+    """
+    time_window_label = "General Hours"
+    domain_boost = 0.0
+    
+    if 6 <= hour <= 10:
+        time_window_label = "Morning Peak (6-11 AM)"
+        morning_items = {"milk", "doodh", "curd", "dahi", "bread", "butter", "tea", "chai", "coffee", "egg", "biscuit", "rusk"}
+        if any(item_kw in name_norm for item_kw in morning_items):
+            domain_boost = 0.85
+    elif 11 <= hour <= 15:
+        time_window_label = "Afternoon Staples (11 AM-4 PM)"
+        afternoon_items = {"rice", "atta", "dal", "oil", "ghee", "salt", "sugar", "spice", "masala"}
+        if any(item_kw in name_norm for item_kw in afternoon_items):
+            domain_boost = 0.80
+    elif 16 <= hour <= 20:
+        time_window_label = "Evening Snacks & Drinks (4-9 PM)"
+        evening_items = {"drink", "pepsi", "coke", "soda", "chip", "namkeen", "kurkure", "maggi", "chocolate", "biscuit", "snack"}
+        if any(item_kw in name_norm for item_kw in evening_items):
+            domain_boost = 0.85
+    elif 21 <= hour or hour <= 5:
+        time_window_label = "Night Session (9 PM-6 AM)"
+        night_items = {"milk", "water", "medicine"}
+        if any(item_kw in name_norm for item_kw in night_items):
+            domain_boost = 0.75
+            
+    return domain_boost, time_window_label
 
 
 class PatternRecognitionEngine:
@@ -145,8 +244,11 @@ class PatternRecognitionEngine:
         inventory_items: list[dict] | None = None,
     ) -> dict[str, Any]:
         """
-        Multimodal prediction for a given price operand.
-        Returns the top predicted item, confidence score (0-1), and human-readable explanation.
+        Multimodal prediction based strictly on 4 core constraints:
+        1. ASR Keyword Matching (Highest Priority)
+        2. Price + Inventory Validation
+        3. Sales Pattern Analysis
+        4. Time-based Behavior
         """
         price = int(float(price))
         now = datetime.now()
@@ -186,18 +288,16 @@ class PatternRecognitionEngine:
         finally:
             conn.close()
 
-        # Build eligible candidate list for this price & speech transcript
+        # Build candidate list
         candidates: dict[int, dict] = {}
         for r in inv_rows:
             d_item = dict(r)
             aliases = [int(a.strip()) for a in (d_item.get("alias_prices") or "").split(",") if a.strip().isdigit()]
             name_norm = _normalize(d_item["name"])
             
-            # Keyword match check in speech transcript
             s_score, s_reason = _speech_keyword_match_score(name_norm, norm_speech)
             is_speech_keyword_match = s_score >= 0.70
 
-            # Include if price matches OR price alias matches OR spoken keyword matches
             if d_item["price"] == price or price in aliases or is_speech_keyword_match:
                 candidates[d_item["id"]] = {
                     "id": d_item["id"],
@@ -209,7 +309,7 @@ class PatternRecognitionEngine:
                     "speech_keyword_match": is_speech_keyword_match,
                 }
 
-        # If no direct inventory candidate, check historical items
+        # Check historical items
         for p in pattern_rows:
             pid = p["item_id"]
             if pid and pid not in candidates:
@@ -226,45 +326,51 @@ class PatternRecognitionEngine:
         if not candidates:
             return {"status": "not_found", "price": price, "candidates": []}
 
-        # Score each candidate using the Prioritized Pipeline:
-        # ASR Input Accepted + Entered Price + Keyword Matching + Price Matching = Final Result
         total_patterns = sum(p["selection_count"] for p in pattern_rows) or 1
         scored_candidates = []
 
         for cid, cand in candidates.items():
             name_norm = _normalize(cand["name"])
             
-            # --- 1. ASR Keyword Matching Score ---
+            # --- CONSTRAINT 1: ASR Keyword Matching (Highest Priority) ---
             speech_score, speech_reason = _speech_keyword_match_score(name_norm, norm_speech)
+            is_asr_matched = speech_score >= 0.70
 
-            # --- 2. Price Matching Score ---
+            # --- CONSTRAINT 2: Price + Inventory Validation ---
             price_score = 0.0
             if cand["price"] == price:
                 price_score = 1.0
             elif cand.get("alias_used"):
                 price_score = 0.90
             elif cand["price"] > 0 and price % cand["price"] == 0:
-                price_score = 0.85  # Composite price match (e.g. 2 x 10 = 20)
+                price_score = 0.85
             elif any(p["item_id"] == cid for p in pattern_rows):
-                price_score = 0.70  # Historical pattern for this price
+                price_score = 0.70
             else:
-                price_score = 0.50  # Custom entered price override
+                price_score = 0.50
 
-            # --- 3. Sub-Signals: Pattern Frequency, Time-of-Day, Co-occurrence ---
+            in_stock = cand["current_qty"] > 0
+            stock_mult = 1.0 if in_stock else 0.15
+            price_inv_score = price_score * stock_mult
+
+            # --- CONSTRAINT 3: Sales Pattern Analysis ---
             item_pats = [p for p in pattern_rows if p["item_id"] == cid]
             item_total_selections = sum(p["selection_count"] for p in item_pats)
             freq_score = item_total_selections / total_patterns if total_patterns > 0 else 0.0
 
-            time_score = 0.0
+            # --- CONSTRAINT 4: Time-based Behavior ---
             time_matches = 0
             for p in item_pats:
                 h_diff = min(abs(p["hour_of_day"] - h), 24 - abs(p["hour_of_day"] - h))
                 if h_diff <= 2:
                     day_mult = 1.2 if p["day_of_week"] == d else 0.9
                     time_matches += p["selection_count"] * day_mult
-            if item_total_selections > 0:
-                time_score = min(1.0, time_matches / item_total_selections)
+            
+            hist_time_score = min(1.0, time_matches / item_total_selections) if item_total_selections > 0 else 0.0
+            domain_boost, time_window_label = _get_time_of_day_info(h, name_norm)
+            time_score = max(hist_time_score, domain_boost)
 
+            # Affinity co-occurrence
             affinity_score = 0.0
             if cart_ids:
                 aff_count = 0
@@ -274,66 +380,93 @@ class PatternRecognitionEngine:
                         aff_count += c_row["co_count"]
                 affinity_score = min(1.0, math.log1p(aff_count) / 3.0)
 
-            # Stock availability
-            in_stock = cand["current_qty"] > 0
-            stock_mult = 1.0 if in_stock else 0.85
-
-            # --- 4. Prioritized Pipeline Fusion Formula ---
-            if speech_score >= 0.75 and price_score >= 0.85:
-                # Tier 1: ASR Keyword Match + Price Match (Top Priority: 0.95 - 1.0)
-                final_score = max(0.95, 0.90 + 0.08 * speech_score + 0.02 * price_score) * stock_mult
+            # --- PRIORITIZED FUSION FORMULA ---
+            if is_asr_matched and price_score >= 0.85:
+                # Priority Tier 1: ASR Keyword Match + Price Match (0.95 - 1.0)
+                final_score = max(0.95, 0.90 + 0.08 * speech_score + 0.02 * price_score) * (1.0 if in_stock else 0.85)
                 pipeline_stage = "asr_keyword_and_price_match"
-            elif speech_score >= 0.75:
-                # Tier 2: ASR Keyword Match with Custom Entered Price (High Priority: 0.85 - 0.90)
-                final_score = max(0.85, 0.80 + 0.10 * speech_score) * stock_mult
+            elif is_asr_matched:
+                # Priority Tier 2: ASR Keyword Match with Custom Price (0.85 - 0.90)
+                final_score = max(0.85, 0.80 + 0.10 * speech_score) * (1.0 if in_stock else 0.85)
                 pipeline_stage = "asr_keyword_match_custom_price"
             elif price_score >= 0.85:
-                # Tier 3: Direct Price Match (0.75 - 0.85)
+                # Priority Tier 3: Price + Inventory + Sales & Time Patterns (0.75 - 0.85)
                 final_score = (
-                    0.50 * price_score
+                    0.45 * price_score
                     + 0.25 * freq_score
-                    + 0.15 * time_score
+                    + 0.20 * time_score
                     + 0.10 * affinity_score
                 ) * stock_mult
                 if len(candidates) == 1:
-                    final_score = max(final_score, 0.95 if in_stock else 0.85)
+                    final_score = max(final_score, 0.95 if in_stock else 0.70)
                 pipeline_stage = "direct_price_match"
             else:
-                # Tier 4: Pattern & Co-occurrence Match (0.60 - 0.75)
+                # Priority Tier 4: Pattern & Time Behavior Match (0.50 - 0.75)
                 final_score = (
-                    0.45 * freq_score
-                    + 0.30 * time_score
+                    0.40 * freq_score
+                    + 0.35 * time_score
                     + 0.25 * affinity_score
                 ) * stock_mult
                 pipeline_stage = "pattern_match"
 
             final_score = round(min(1.0, max(0.05, final_score)), 3)
 
-            # Natural language reason matching the prioritized pipeline
+            # Build human-readable breakdown explanation
             reasons = []
-            if speech_reason and price_score >= 0.85:
-                reasons.append(f'{speech_reason} (₹{price})')
-            elif speech_reason:
-                reasons.append(f'{speech_reason} @ entered ₹{price}')
-            elif len(candidates) == 1:
-                reasons.append("Unique price match")
-            elif freq_score >= 0.5:
-                reasons.append(f"{int(freq_score * 100)}% historical choice")
-            elif time_score >= 0.6:
-                reasons.append(f"Frequent at {h % 12 or 12} {'PM' if h >= 12 else 'AM'}")
-            elif affinity_score > 0.3:
-                reasons.append("Frequently bought together")
-            else:
-                reasons.append(f"Price match ₹{price}")
-
+            if speech_reason:
+                reasons.append(speech_reason)
+            if price_score >= 0.85:
+                reasons.append(f"Price Match ₹{price}")
             if in_stock:
                 reasons.append(f"In Stock ({cand['current_qty']})")
+            else:
+                reasons.append("Out of Stock")
+            if freq_score >= 0.4:
+                reasons.append(f"{int(freq_score * 100)}% frequent choice")
+            if time_score >= 0.6:
+                reasons.append(time_window_label)
+
+            constraints_breakdown = {
+                "1_asr_keyword_matching": {
+                    "constraint": "ASR Keyword Matching",
+                    "priority": 1,
+                    "status": "Highest Priority",
+                    "score": round(speech_score, 2),
+                    "matched": is_asr_matched,
+                    "reason": speech_reason or "No speech keyword match"
+                },
+                "2_price_inventory_validation": {
+                    "constraint": "Price + Inventory Validation",
+                    "priority": 2,
+                    "score": round(price_inv_score, 2),
+                    "price_matched": price_score >= 0.85,
+                    "in_stock": in_stock,
+                    "current_qty": cand["current_qty"],
+                    "reason": f"Price ₹{price} match • In Stock ({cand['current_qty']})" if in_stock else f"Price ₹{price} match • Out of Stock"
+                },
+                "3_sales_pattern_analysis": {
+                    "constraint": "Sales Pattern Analysis",
+                    "priority": 3,
+                    "score": round(freq_score, 2),
+                    "historical_count": item_total_selections,
+                    "reason": f"{item_total_selections} historical sales" if item_total_selections > 0 else "New product"
+                },
+                "4_time_based_behavior": {
+                    "constraint": "Time-based Behavior",
+                    "priority": 4,
+                    "score": round(time_score, 2),
+                    "current_hour": h,
+                    "time_window": time_window_label,
+                    "reason": f"Trend active for {time_window_label}" if time_score >= 0.5 else f"Hour {h}:00 trend"
+                }
+            }
 
             cand_result = {
                 **cand,
                 "confidence": final_score,
                 "reason": " • ".join(reasons),
                 "pipeline_stage": pipeline_stage,
+                "constraints": constraints_breakdown,
                 "scores": {
                     "speech": round(speech_score, 2),
                     "price": round(price_score, 2),
@@ -353,4 +486,5 @@ class PatternRecognitionEngine:
             "best_match": top,
             "candidates": scored_candidates,
             "confidence": top["confidence"],
+            "prediction_constraints": top["constraints"]
         }

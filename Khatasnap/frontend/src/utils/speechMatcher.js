@@ -55,21 +55,41 @@ export function extractItemMentions(transcript, inventoryItems) {
   if (!transcript) return [];
   
   const normTrans = normalizeStr(transcript);
+  if (!normTrans) return [];
+
   const mentions = [];
-  const words = normTrans.split(' ');
+  const words = normTrans.split(' ').filter(Boolean);
   
   for (const item of inventoryItems) {
+     // STAGE 1 — Hard Elimination: Remove out-of-stock items (qty <= 0)
+     const stockQty = item.current_qty !== undefined ? item.current_qty : (item.stock !== undefined ? item.stock : item.quantity);
+     if (stockQty !== undefined && stockQty !== null && Number(stockQty) <= 0) {
+        continue;
+     }
+
      const itemName = normalizeStr(item.name);
+     if (!itemName) continue;
+
      let matchScore = 0;
      let matchedAlias = '';
      
-     if (normTrans.includes(itemName)) {
+     if (normTrans === itemName) {
         matchScore = 1.0;
         matchedAlias = itemName;
+     } else if (normTrans.includes(itemName)) {
+        matchScore = 0.95;
+        matchedAlias = itemName;
+     } else if (itemName.includes(normTrans)) {
+        matchScore = 0.90;
+        matchedAlias = normTrans;
      } else {
         const aliases = item.aliases ? item.aliases.map(normalizeStr) : [];
         for (const alias of aliases) {
-           if (normTrans.includes(alias)) {
+           if (normTrans === alias) {
+              matchScore = 0.95;
+              matchedAlias = alias;
+              break;
+           } else if (normTrans.includes(alias) || alias.includes(normTrans)) {
               matchScore = 0.85;
               matchedAlias = alias;
               break;
@@ -77,22 +97,26 @@ export function extractItemMentions(transcript, inventoryItems) {
         }
         
         if (matchScore === 0) {
-           const firstWord = itemName.split(' ')[0];
-           if (itemName.length > 4 && normTrans.includes(firstWord)) {
-               matchScore = 0.6;
-               matchedAlias = firstWord;
+           const itemWords = itemName.split(' ').filter(w => w.length > 2);
+           const matchedWord = itemWords.find(w => words.includes(w));
+           if (matchedWord) {
+               matchScore = 0.75;
+               matchedAlias = matchedWord;
            } else {
                // Add fuzzy phonetic matching for similar-sounding ASR errors
                const candidates = [itemName, ...aliases];
                for (const word of words) {
                    if (word.length > 3) {
                        for (const cand of candidates) {
-                           const candFirst = cand.split(' ')[0];
-                           if (candFirst.length > 3 && similarity(word, candFirst) >= 0.75) {
-                               matchScore = 0.55;
-                               matchedAlias = candFirst;
-                               break;
+                           const candWords = cand.split(' ').filter(w => w.length > 3);
+                           for (const cw of candWords) {
+                               if (similarity(word, cw) >= 0.75) {
+                                   matchScore = 0.55;
+                                   matchedAlias = cw;
+                                   break;
+                               }
                            }
+                           if (matchScore > 0) break;
                        }
                    }
                    if (matchScore > 0) break;

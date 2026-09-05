@@ -7,7 +7,8 @@ import { useVoice } from '../hooks/useVoice';
 import { transcribeInventory } from '../api/voice';
 import MicButton from '../components/voice/MicButton';
 import { useToast } from '../hooks/useToast';
-import { ChevronDown, ChevronRight, Edit, Plus, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Edit, Plus, Trash2, X, FileText } from 'lucide-react';
+import BillScannerModal from '../components/inventory/BillScannerModal';
 
 function fmtMoney(v) {
   const n = Number(v || 0);
@@ -80,6 +81,7 @@ export default function InventoryPage() {
   const [categories, setCategories] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [selectedIds, setSelectedIds] = useState({});
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({
@@ -443,6 +445,13 @@ export default function InventoryPage() {
               </Button>
               <Button variant="ghost" onClick={clearSelected} disabled={selectedList.length === 0}>Clear selection</Button>
               <Button variant="ghost" onClick={() => setSearch('')}>Clear</Button>
+              <Button
+                style={{ background: 'linear-gradient(135deg, #4F46E5, #7C3AED)', color: '#fff', border: 'none', fontWeight: 700 }}
+                icon={<FileText size={16} />}
+                onClick={() => setScannerOpen(true)}
+              >
+                Scan Distributor Bill
+              </Button>
               <Button icon={<Plus size={16} />} onClick={() => openAdd()}>Add item</Button>
               <Button onClick={fetchStock}>Refresh</Button>
             </div>
@@ -1092,6 +1101,12 @@ export default function InventoryPage() {
           </div>
         </div>
       </Modal>
+
+      <BillScannerModal
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onSuccess={() => fetchStock()}
+      />
     </div>
   );
 }

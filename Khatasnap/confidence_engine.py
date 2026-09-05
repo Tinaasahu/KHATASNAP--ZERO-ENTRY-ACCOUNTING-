@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 import os
 import re
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -494,6 +495,457 @@ def confidence_result_to_dict(r: ConfidenceResult) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Explainable Confidence Engine (Smart Reconciliation)
+# ──────────────────────────────────────────────────────────────────────────────
+
+EXPLAINABLE_WEIGHTS = {
+    "asr": 40,
+    "price": 25,
+    "inventory": 15,
+    "sales": 10,
+    "time": 10
+}
+
+HINGLISH_SYNONYMS = {
+    "doodh": "milk", "dudh": "milk", "malk": "milk", "milak": "milk",
+    "biskut": "biscuit", "biscut": "biscuit", "biskit": "biscuit",
+    "cheeni": "sugar", "chini": "sugar", "sakkar": "sugar",
+    "tel": "oil", "tael": "oil", "tail": "oil",
+    "paani": "water", "pani": "water",
+    "dahi": "curd", "dahee": "curd", "yogurt": "curd",
+    "makhan": "butter", "makkhan": "butter",
+    "sabun": "soap", "saboon": "soap",
+    "namak": "salt", "nammak": "salt",
+    "atta": "flour", "aata": "flour",
+    "chai": "tea", "chaaye": "tea", "chaye": "tea",
+    "chawal": "rice",
+    "anda": "egg", "ande": "egg",
+    "dal": "pulses", "daal": "pulses",
+    "haldi": "turmeric",
+    "mirch": "chilli", "mirchi": "chilli",
+    "ghee": "ghee", "ghi": "ghee",
+}
+
+class PredictionResult(dict):
+    """Hybrid object for prediction that functions as string product name AND dictionary for legacy code."""
+    def __init__(self, name: str, confidence: int, status: str, p_id: Any, price: float, emoji: str):
+        super().__init__({
+            "name": name,
+            "confidence": confidence,
+            "status": status,
+            "id": p_id,
+            "price": price,
+            "emoji": emoji
+        })
+        self.name = str(name)
+
+    def __str__(self):
+        return self.name
+
+    def __repr__(self):
+        return repr(self.name)
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self.name == other
+        return super().__eq__(other)
+
+
+class ExplainableConfidenceEngine:
+    """
+    Production-ready Explainable Confidence Score Engine for KhataSnap Calculator AI.
+    
+    4-Stage Filter -> Score Pipeline:
+      Stage 1 — Hard Elimination: current_qty <= 0 products eliminated completely.
+      Stage 2 — Price Validation: abs(selling_price - entered_price) <= price_tolerance (default 2.0).
+      Stage 3 — ASR Semantic Matching: RapidFuzz, phonetic, Hinglish dictionary matching.
+      Stage 4 — Context Scoring: ASR (40) + Price (25) + Inventory (15) + Sales (10) + Time (10) = 100 max.
+    """
+
+
+    def __init__(self, weights: dict[str, int] | None = None):
+        self.weights = dict(EXPLAINABLE_WEIGHTS)
+        if weights:
+            self.weights.update(weights)
+
+    def _normalize_text(self, text: str) -> str:
+        if not text:
+            return ""
+        text = text.lower()
+        text = re.sub(r"[^\w\s]", "", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    def calculate_asr_score(self, item_name: str, aliases: list[str], asr_transcript: str) -> tuple[int, list[str]]:
+        max_weight = self.weights.get("asr", 40)
+        norm_trans = self._normalize_text(asr_transcript)
+        norm_name  = self._normalize_text(item_name)
+
+        if not norm_trans or not norm_name:
+            return 0, []
+
+        explanations = []
+        best_ratio = 0.0
+        detected_keyword = ""
+
+        # 1. Expand Hinglish synonyms in transcript
+        trans_words = norm_trans.split()
+        expanded_words = []
+        for w in trans_words:
+            expanded_words.append(w)
+            if w in HINGLISH_SYNONYMS:
+                expanded_words.append(HINGLISH_SYNONYMS[w])
+                detected_keyword = w
+        expanded_trans = " ".join(expanded_words)
+
+        all_names = [norm_name] + [self._normalize_text(str(a)) for a in (aliases or []) if a]
+
+        for target_name in all_names:
+            if not target_name:
+                continue
+
+            # Exact name or alias in transcript
+            if target_name in norm_trans or target_name in expanded_trans:
+                best_ratio = 1.0
+                if detected_keyword:
+                    explanations.append(f"Detected keyword '{detected_keyword}'")
+                else:
+                    explanations.append(f"Matched keyword '{target_name}' in voice")
+                break
+
+            # Word level matching
+            name_words = [w for w in target_name.split() if len(w) > 2]
+            if name_words:
+                matches = sum(1 for w in name_words if w in norm_trans or w in expanded_trans)
+                ratio = matches / len(name_words)
+                if ratio > best_ratio:
+                    best_ratio = ratio
+
+            # Fuzzy Levenshtein
+            for tw in trans_words:
+                if len(tw) > 2:
+                    for nw in target_name.split():
+                        if len(nw) > 2:
+                            sim = _similarity(tw, nw)
+                            if tw in HINGLISH_SYNONYMS and HINGLISH_SYNONYMS[tw] in target_name:
+                                sim = 1.0
+                                detected_keyword = tw
+                            if sim > best_ratio:
+                                best_ratio = sim
+
+        score = int(round(best_ratio * max_weight))
+        if score > 0 and not explanations:
+            if detected_keyword:
+                explanations.append(f"Detected keyword '{detected_keyword}'")
+            else:
+                explanations.append(f"Speech transcript matches '{item_name}'")
+
+        return min(max_weight, max(0, score)), explanations
+
+    def calculate_price_score(self, entered_price: float, product_price: float) -> tuple[int, list[str]]:
+        max_weight = self.weights.get("price", 25)
+        diff = abs(entered_price - product_price)
+        # Decay formula: max(0, 25 - 5 * abs_diff)
+        raw_score = max_weight - (5.0 * diff)
+        score = int(round(max(0.0, min(float(max_weight), raw_score))))
+
+        explanations = []
+        if diff == 0:
+            explanations.append(f"₹{int(entered_price) if entered_price == int(entered_price) else entered_price} exactly matches the product price")
+        elif diff <= 1.0:
+            explanations.append(f"₹{entered_price} is within ₹1 of product price ₹{product_price}")
+        elif score > 0:
+            explanations.append(f"₹{entered_price} matches near product price ₹{product_price}")
+
+        return score, explanations
+
+    def calculate_inventory_score(self, current_qty: int) -> tuple[int, bool, list[str]]:
+        max_weight = self.weights.get("inventory", 15)
+        if current_qty <= 0:
+            return 0, False, ["Product out of stock"]
+        return max_weight, True, ["Item is available in inventory"]
+
+    def calculate_sales_score(self, sales_count: int, max_sales_count: int) -> tuple[int, list[str]]:
+        max_weight = self.weights.get("sales", 10)
+        if max_sales_count <= 0 or sales_count <= 0:
+            return 0, []
+
+        ratio = min(1.0, sales_count / max_sales_count)
+        score = int(round(ratio * max_weight))
+
+        explanations = []
+        if score >= 7:
+            explanations.append("Frequently sold product in shop history")
+        elif score >= 3:
+            explanations.append("Regularly purchased product")
+
+        return score, explanations
+
+    def calculate_time_score(self, hourly_sales: int, max_hourly_sales: int, current_hour: int) -> tuple[int, list[str]]:
+        max_weight = self.weights.get("time", 10)
+        if max_hourly_sales <= 0 or hourly_sales <= 0:
+            return 0, []
+
+        ratio = min(1.0, hourly_sales / max_hourly_sales)
+        score = int(round(ratio * max_weight))
+
+        explanations = []
+        if score >= 7:
+            if 6 <= current_hour <= 11:
+                explanations.append("Frequently sold in morning hours")
+            elif 12 <= current_hour <= 16:
+                explanations.append("Frequently sold in afternoon hours")
+            elif 17 <= current_hour <= 22:
+                explanations.append("Frequently sold in evening hours")
+            else:
+                explanations.append(f"High purchasing pattern at {current_hour}:00")
+        elif score >= 3:
+            explanations.append(f"Popular purchase around {current_hour}:00")
+
+        return score, explanations
+
+    def predict(
+        self,
+        entered_price: float,
+        asr_transcript: str = "",
+        inventory_items: list[dict] | None = None,
+        historical_sales_data: dict | None = None,
+        current_hour: int | None = None,
+        price_tolerance: float = 2.0,
+    ) -> dict[str, Any]:
+        """
+        4-Stage Filter -> Score Pipeline for KhataSnap Calculator AI:
+        Stage 1 — Hard Elimination: Remove every product where current_qty <= 0.
+        Stage 2 — Price Validation: Keep products whose selling_price is within tolerance abs(p - price) <= 2.
+        Stage 3 — ASR Semantic Matching: RapidFuzz / Phonetic / Hinglish category matching.
+        Stage 4 — Context Scoring: ASR (40) + Price (25) + Inventory (15) + Sales (10) + Time (10) = 100.
+        """
+        if current_hour is None:
+            current_hour = datetime.now().hour
+
+        items = inventory_items
+        sales_data = historical_sales_data or {}
+
+        if items is None:
+            # Load active products directly from DB if available
+            try:
+                from database import get_conn
+                conn = get_conn()
+                try:
+                    cur = conn.cursor()
+                    cur.execute("""
+                        SELECT p.id, p.name, p.selling_price, p.current_qty, p.emoji,
+                               group_concat(pa.alias, '|||') AS alias_blob
+                        FROM products p
+                        LEFT JOIN product_aliases pa ON pa.product_id = p.id
+                        WHERE p.is_active = 1
+                        GROUP BY p.id
+                    """)
+                    items = []
+                    for row in cur.fetchall():
+                        d = dict(row)
+                        blob = d.pop('alias_blob', '') or ''
+                        d['aliases'] = [a for a in blob.split('|||') if a] if blob else []
+                        items.append(d)
+
+                    # Fetch sales history stats per item
+                    cur.execute("""
+                        SELECT item_id, SUM(selection_count) as total_sales,
+                               SUM(CASE WHEN hour_of_day = ? THEN selection_count ELSE 0 END) as hour_sales
+                        FROM price_item_patterns
+                        GROUP BY item_id
+                    """, (current_hour,))
+                    for r in cur.fetchall():
+                        sales_data[str(r['item_id'])] = {
+                            'total_sales': r['total_sales'] or 0,
+                            'hour_sales': r['hour_sales'] or 0,
+                        }
+                finally:
+                    conn.close()
+            except Exception:
+                items = []
+
+        items = items or []
+
+        # ── Stage 1: Hard Elimination ──────────────────────────────────────────────
+        # Remove every product where current_qty <= 0. Out-of-stock items NEVER participate in scoring.
+        stage1_items = [it for it in items if int(it.get("current_qty") or 0) > 0]
+
+        if not stage1_items:
+            return {
+                "prediction": "No matching product in stock",
+                "confidence": 0,
+                "status": "LOW",
+                "reasons": {"asr": 0, "price": 0, "inventory": 0, "sales": 0, "time": 0},
+                "explanation": ["No in-stock products available in inventory."],
+                "alternatives": []
+            }
+
+        entered_price_f = float(entered_price or 0)
+
+        # ── Stage 2: Price Validation & Filtering ──────────────────────────────────
+        # Keep products within tolerance abs(selling_price - entered_price) <= price_tolerance
+        stage2_items = stage1_items
+        if entered_price_f > 0:
+            tol_matches = [
+                it for it in stage1_items
+                if abs(float(it.get("selling_price") or it.get("price") or 0) - entered_price_f) <= price_tolerance
+            ]
+            if tol_matches:
+                stage2_items = tol_matches
+
+        # ── Stage 3 & 4: ASR Semantic Matching & Context Scoring ───────────────────
+        max_sales_count = max([sales_data.get(str(it.get('id')), {}).get('total_sales', 0) for it in stage2_items] + [0])
+        max_hourly_sales = max([sales_data.get(str(it.get('id')), {}).get('hour_sales', 0) for it in stage2_items] + [0])
+
+        candidates = []
+
+        for item in stage2_items:
+            p_id = item.get("id")
+            name = item.get("name", "Unknown Item")
+            price = float(item.get("selling_price") or item.get("price") or 0)
+            stock = int(item.get("current_qty") or 0)
+            aliases = item.get("aliases") or []
+            emoji = item.get("emoji", "📦")
+
+            inv_score, is_avail, inv_expl = self.calculate_inventory_score(stock)
+            asr_score, asr_expl = self.calculate_asr_score(name, aliases, asr_transcript)
+            price_score, price_expl = self.calculate_price_score(entered_price_f, price)
+
+            item_sales_info = sales_data.get(str(p_id), {})
+            s_count = item_sales_info.get("total_sales", 0)
+            sales_score, sales_expl = self.calculate_sales_score(s_count, max_sales_count)
+
+            h_count = item_sales_info.get("hour_sales", 0)
+            time_score, time_expl = self.calculate_time_score(h_count, max_hourly_sales, current_hour)
+
+            total_confidence = min(100, max(0, asr_score + price_score + inv_score + sales_score + time_score))
+
+            explanations = []
+            explanations.extend(asr_expl)
+            explanations.extend(price_expl)
+            explanations.extend(inv_expl)
+            explanations.extend(sales_expl)
+            explanations.extend(time_expl)
+
+            candidates.append({
+                "id": p_id,
+                "name": name,
+                "price": price,
+                "emoji": emoji,
+                "confidence": total_confidence,
+                "reasons": {
+                    "asr": asr_score,
+                    "price": price_score,
+                    "inventory": inv_score,
+                    "sales": sales_score,
+                    "time": time_score,
+                    "salesPattern": sales_score,
+                    "timePattern": time_score
+                },
+                "explanation": explanations,
+            })
+
+        # Rank candidates by confidence descending
+        candidates.sort(key=lambda x: x["confidence"], reverse=True)
+
+        top_match = candidates[0]
+        conf = top_match["confidence"]
+
+        if conf >= 90:
+            status = "AUTO_SELECT"
+        elif conf >= 75:
+            status = "ONE_TAP_CONFIRM"
+        else:
+            status = "LOW"
+
+
+        prediction_obj = PredictionResult(
+            name=top_match["name"],
+            confidence=conf,
+            status=status,
+            p_id=top_match["id"],
+            price=top_match["price"],
+            emoji=top_match["emoji"]
+        )
+
+        reasons = {
+            "asr": top_match["reasons"]["asr"],
+            "price": top_match["reasons"]["price"],
+            "inventory": top_match["reasons"]["inventory"],
+            "sales": top_match["reasons"]["sales"],
+            "time": top_match["reasons"]["time"],
+            "salesPattern": top_match["reasons"]["sales"],
+            "timePattern": top_match["reasons"]["time"]
+        }
+
+        return {
+            "prediction": prediction_obj,
+            "confidence": conf,
+            "status": status,
+            "reasons": reasons,
+            "explanation": top_match["explanation"],
+            "alternatives": [
+                {
+                    "name": alt["name"],
+                    "confidence": alt["confidence"],
+                    "id": alt["id"],
+                    "price": alt["price"]
+                }
+                for alt in candidates[1:3]
+            ],
+            "candidates": candidates
+        }
+
+
+
+    def record_feedback(
+        self,
+        product_id: int | str,
+        product_name: str,
+        price: float | int,
+        hour: int | None = None,
+        day: int | None = None
+    ) -> bool:
+        """
+        Learning feedback: Updates historical sales/time statistics silently when user confirms
+        or selects a product.
+        """
+        try:
+            from database import get_conn
+            now = datetime.now()
+            h = hour if hour is not None else now.hour
+            d = day if day is not None else now.weekday()
+            p = int(round(float(price))) if price else 0
+
+            conn = get_conn()
+            try:
+                row = conn.execute("""
+                    SELECT id FROM price_item_patterns
+                    WHERE item_id=? AND hour_of_day=? AND day_of_week=?
+                """, (product_id, h, d)).fetchone()
+
+                if row:
+                    conn.execute("""
+                        UPDATE price_item_patterns
+                        SET selection_count = selection_count + 1, last_selected_at = datetime('now')
+                        WHERE id=?
+                    """, (row[0],))
+                else:
+                    conn.execute("""
+                        INSERT INTO price_item_patterns
+                        (price, item_id, item_name, hour_of_day, day_of_week, selection_count, last_selected_at)
+                        VALUES (?, ?, ?, ?, ?, 1, datetime('now'))
+                    """, (p, product_id, product_name, h, d))
+
+                conn.commit()
+                return True
+            finally:
+                conn.close()
+        except Exception:
+            return False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Quick smoke-test
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
@@ -510,3 +962,15 @@ if __name__ == "__main__":
     )
     import json
     print(json.dumps(confidence_result_to_dict(r), indent=2))
+
+    # Explainable engine smoke test
+    exp_engine = ExplainableConfidenceEngine()
+    exp_inv = [
+        {"id": 101, "name": "Amul Taaza 500ml", "selling_price": 32, "current_qty": 40},
+        {"id": 102, "name": "Mother Dairy",     "selling_price": 30, "current_qty": 25},
+        {"id": 103, "name": "Toned Milk",       "selling_price": 32, "current_qty": 0}, # Stock = 0 eliminated
+    ]
+    pred = exp_engine.predict(entered_price=32, asr_transcript="doodh", inventory_items=exp_inv)
+    print("\nExplainable Engine Prediction:")
+    print(json.dumps(pred, indent=2))
+

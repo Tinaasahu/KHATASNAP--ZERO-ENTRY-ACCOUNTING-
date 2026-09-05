@@ -119,67 +119,74 @@ PRODUCT_DICT = [
     "PARLE G BISCUIT", "HIDE AND SEEK", "BOURBON",
 ]
 
-def _fuzzy_match_product(name: str, threshold: int = 75) -> str:
-    """
-    Match extracted product name against known FMCG dictionary.
-    Returns corrected name if match score >= threshold, else original.
-    Uses simple token-based similarity (no external library needed).
-    """
-    if not name or len(name) < 3:
+
+def _fuzzy_match_product(name: str) -> str:
+    if not name:
         return name
+    name_str = str(name).strip()
+    if not name_str or not PRODUCT_DICT:
+        return name_str
+    import difflib
+    matches = difflib.get_close_matches(name_str.upper(), PRODUCT_DICT, n=1, cutoff=0.85)
+    if matches:
+        return matches[0]
+    return name_str
 
-    name_upper = name.upper()
 
-    # Exact match first
-    for product in PRODUCT_DICT:
-        if product in name_upper or name_upper in product:
-            return product
+def _clean_ocr_product_name(name: str) -> str:
+    if not name:
+        return ""
+    t = str(name).strip()
+    
+    # 1. Strip leading line/item serial numbers (e.g. "01 ", "1.", "40 ")
+    t = re.sub(r'^\b\d{1,3}[\.\)]\s*', '', t)
+    t = re.sub(r'^\b\d{2}\s+(?=[A-Za-z])', '', t)
+    
+    # 2. Fix OCR unit confusion (e.g. "400 9" -> "400g", "100 9" -> "100g", "50 9" -> "50g")
+    t = re.sub(r'(\d+)\s+9\b', r'\1g', t)
+    t = re.sub(r'(\d+)\s*9m\b', r'\1gm', t, flags=re.I)
+    
+    # 3. Fix OCR 14 -> 1L for liquids (e.g. "Oil 14" -> "Oil 1L", "Milk 14" -> "Milk 1L")
+    t = re.sub(r'\b(Oil|Milk|Ghee|Juice|Water|Cleaner|Fluid)\s+14\b', r'\1 1L', t, flags=re.I)
+    
+    # 4. Common spelling fixes
+    t = re.sub(r'\bTollet\b', 'Toilet', t, flags=re.I)
+    t = re.sub(r'\bproduci\b', 'product', t, flags=re.I)
+    t = re.sub(r'\bciarity\b', 'clarity', t, flags=re.I)
+    t = re.sub(r'\btexi\b', 'text', t, flags=re.I)
 
-    # Token overlap similarity
-    name_tokens = set(re.findall(r'\b\w{3,}\b', name_upper))
-    best_score = 0
-    best_match = name
+    # 5. Clean up duplicate or extra spaces
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
 
-    for product in PRODUCT_DICT:
-        prod_tokens = set(re.findall(r'\b\w{3,}\b', product.upper()))
-        if not prod_tokens:
-            continue
-        intersection = len(name_tokens & prod_tokens)
-        union = len(name_tokens | prod_tokens)
-        score = int(intersection / union * 100) if union > 0 else 0
-        if score > best_score:
-            best_score = score
-            best_match = product
-
-    if best_score >= threshold:
-        logger.info(f"  Fuzzy match: '{name}' -> '{best_match}' ({best_score}%)")
-        return best_match
-
-    return name
 
 
 # ── Header map ────────────────────────────────────────────────────────────
 
 HEADER_MAP = {
     "description":"desc","product":"desc","item":"desc","particulars":"desc","name":"desc",
+    "productname":"desc","itemdescription":"desc","descriptionofgoods":"desc","itemname":"desc","details":"desc",
     "hsn":"hsn","sac":"hsn","hsnsac":"hsn","hsncode":"hsn","hsnno":"hsn",
-    "qty":"qty","quantity":"qty","qnty":"qty","nos":"qty",
-    "pcs":"uom","uom":"uom","unit":"uom","pkg":"uom",
+    "batch":"batch","batchno":"batch","batchn":"batch","batchnumber":"batch","lot":"batch","lotno":"batch",
+    "mfg":"mfg","mfgdate":"mfg","mfd":"mfg",
+    "exp":"exp","expdate":"exp","expiry":"exp","expirydate":"exp","bestbefore":"exp",
+    "qty":"qty","quantity":"qty","qnty":"qty","nos":"qty","pcs":"uom",
+    "uom":"uom","unit":"uom","pkg":"uom","pack":"uom",
     "case":"case","free":"free","mrp":"mrp",
-    "rate":"rate","price":"rate",
+    "rate":"rate","price":"rate","rateamt":"rate","unitprice":"rate","cost":"rate",
     "scheme":"scheme","schm":"scheme","sch":"scheme",
     "schmrs":"scheme_amt","schmart":"scheme_amt",
-    "disc%":"disc_pct","dis%":"disc_pct",
+    "disc":"disc_pct","disc%":"disc_pct","dis%":"disc_pct","discount":"disc_pct","discpercent":"disc_pct",
     "discamt":"disc_amt","discrs":"disc_amt",
-    "taxablevalue":"taxable","taxableamt":"taxable",
-    "cgst%":"cgst_r","cgstrate":"cgst_r",
+    "taxablevalue":"taxable","taxableamt":"taxable","taxableamount":"taxable","taxableval":"taxable",
+    "cgst%":"cgst_r","cgstrate":"cgst_r","cgst":"cgst_r",
     "cgstamt":"cgst_a","cgstrs":"cgst_a",
-    "sgst%":"sgst_r","sgstrate":"sgst_r",
+    "sgst%":"sgst_r","sgstrate":"sgst_r","sgst":"sgst_r",
     "sgstamt":"sgst_a","sgstrs":"sgst_a",
-    "igst%":"igst_r","igstamt":"igst_a",
+    "igst%":"igst_r","igstamt":"igst_a","igst":"igst_r",
     "cess":"cess",
-    "gst%":"gst","tax%":"gst",
-    "netamount":"amount","amountrs":"amount","netamt":"amount","total":"amount",
+    "gst":"gst","gst%":"gst","tax%":"gst","tax":"gst","gstpercent":"gst","taxrate":"gst",
+    "amount":"amount","netamount":"amount","amountrs":"amount","netamt":"amount","total":"amount","totalamount":"amount","linetotal":"amount","value":"amount",
 }
 
 SUMMARY_KW = [
@@ -327,13 +334,15 @@ def extract_line_items(data_rows: list, header_rows: list) -> list[dict]:
         elif len(name) >= 2:
             items.append(item)
 
-    # Apply fuzzy product name matching
+    # Apply cleaning & fuzzy product name matching
     for item in items:
+        item["name"] = _clean_ocr_product_name(item["name"])
         item["name"] = _fuzzy_match_product(item["name"])
 
     return [i for i in items
             if not re.match(r'^[\d.\s,]+$', i["name"])
             and not re.match(r'^t?otal', i["name"], re.I)]
+
 
 
 def _best_amount(row: list, rate_v: float, assigned_amt: float) -> float:
@@ -366,11 +375,20 @@ def _parse_row(row: list, col_map: dict) -> dict | None:
             assigned[role] = assigned.get(role,"") + sep + block["text"]
 
     name = assigned.get("desc","").strip()
-    if re.match(r'^\d{1,3}\.?$', name):
+    if not name or len(name) < 2 or re.match(r'^\d{1,3}\.?$', name):
+        # Fallback: extract non-numeric text blocks from row sorted left to right so items aren't dropped
+        name_parts = []
         for b in sorted(row, key=lambda b: b["bbox"]["x1"]):
             t = b["text"].strip()
-            if len(t)>=3 and not re.match(r'^\d+\.?\d*$',t): name=t; break
-    if not name or len(name) < 2: return None
+            if not t or re.match(r'^\d{1,3}\.?$', t):
+                continue
+            if not re.match(r'^\d+(\.\d+)?$', t.replace(",", "")):
+                if not re.match(r'^\d{4,8}$', t): # skip standalone HSN codes
+                    name_parts.append(t)
+        name = " ".join(name_parts).strip()
+
+    if not name or len(name) < 2:
+        return None
 
     rate_v  = _f(assigned.get("rate",""))
     raw_amt = _f(assigned.get("amount",""))
@@ -393,12 +411,26 @@ def _parse_row(row: list, col_map: dict) -> dict | None:
         elif 0 < c <= 50: gv = c
 
     qty_v = int(_f(assigned.get("qty",""))) if assigned.get("qty") else 0
+    if qty_v == 0 and rate_v > 0 and amt_v > 0:
+        try:
+            calc_qty = round(amt_v / rate_v)
+            if 1 <= calc_qty <= 1000:
+                qty_v = int(calc_qty)
+        except Exception:
+            pass
+    if qty_v == 0:
+        qty_v = 1
+
+    batch_v = assigned.get("batch", "").strip()
+    exp_v = assigned.get("exp", "").strip()
+    disc_v = _f(assigned.get("disc_pct", assigned.get("disc_amt", "")))
 
     return {
         "name": name, "hsn": hsn,
         "qty": qty_v, "unit": unit.strip(),
         "mrp": _f(assigned.get("mrp","")),
         "rate": rate_v, "gst_percent": gv, "amount": amt_v,
+        "batch": batch_v, "expiry": exp_v, "discount": disc_v,
     }
 
 

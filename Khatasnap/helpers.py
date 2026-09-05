@@ -102,3 +102,147 @@ def fuzzy_match(query, candidates, min_confidence=0.0):
                     if 0.45 >= min_confidence: return c, 0.45
 
     return None, 0
+
+
+# ── Inventory Voice Command Parser ───────────────────────────────────────────
+
+HINGLISH_INVENTORY_SYNONYMS = {
+    "doodh": "milk", "dudh": "milk", "malk": "milk",
+    "biskut": "biscuit", "biscut": "biscuit", "biskit": "biscuit",
+    "cheeni": "sugar", "chini": "sugar", "sakkar": "sugar",
+    "tel": "oil", "tael": "oil", "tail": "oil",
+    "paani": "water", "pani": "water",
+    "dahi": "curd", "dahee": "curd", "yogurt": "curd",
+    "makhan": "butter", "makkhan": "butter",
+    "sabun": "soap", "saboon": "soap",
+    "namak": "salt", "nammak": "salt",
+    "atta": "flour", "aata": "flour",
+    "chai": "tea", "chaaye": "tea", "chaye": "tea",
+    "chawal": "rice",
+    "anda": "egg", "ande": "egg",
+    "dal": "pulses", "daal": "pulses",
+    "haldi": "turmeric",
+    "mirch": "chilli", "mirchi": "chilli",
+    "ghee": "ghee", "ghi": "ghee",
+}
+
+ADD_KEYWORDS = [
+    "add", "stock in", "restock", "received", "purchase", "plus", "put", "increase",
+    "added", "buy", "bought", "in", "incoming", "fill", "refill", "jodo", "daalo",
+    "laya", "aaya", "banao", "rakho", "aagaya", "badhao", "aaya hai", "khareeda"
+]
+
+DEDUCT_KEYWORDS = [
+    "deduct", "remove", "sell", "sold", "reduce", "minus", "hatao", "kam karo",
+    "nikalo", "gaya", "bika", "take out", "substract", "sub", "less", "spent",
+    "use", "used", "out", "nikal do", "kam", "becha", "bech diya", "de diya", "diya"
+]
+
+QUANTITY_WORDS = {
+    "ek": 1, "do": 2, "teen": 3, "char": 4, "paanch": 5, "panch": 5,
+    "chhe": 6, "che": 6, "saat": 7, "aath": 8, "nau": 9, "das": 10,
+    "gyarah": 11, "barah": 12, "pandrah": 15, "bees": 20, "pachis": 25,
+    "tees": 30, "chalis": 40, "pachas": 50, "so": 100, "sau": 100,
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20,
+    "thirty": 30, "forty": 40, "fifty": 50, "hundred": 100,
+    "half": 0.5, "couple": 2, "dozen": 12,
+}
+
+def parse_inventory_voice_command(raw_transcript: str, products: list[dict]) -> list[dict]:
+    """
+    Parses an inventory voice command transcript into a list of structured item actions.
+    Supports Hinglish synonyms, action keyword detection, quantity extraction, and multi-item phrases.
+    """
+    if not raw_transcript:
+        return []
+
+    norm_full = normalize(raw_transcript)
+    if not norm_full:
+        return []
+
+    sub_phrases = re.split(r'\b(and|aur|comma|;\n)\b', norm_full)
+    sub_phrases = [sp.strip() for sp in sub_phrases if sp and sp not in {'and', 'aur', 'comma', ';'}]
+    if not sub_phrases:
+        sub_phrases = [norm_full]
+
+    results = []
+
+    for phrase in sub_phrases:
+        words = phrase.split()
+        if not words:
+            continue
+
+        expanded_words = []
+        for w in words:
+            expanded_words.append(w)
+            if w in HINGLISH_INVENTORY_SYNONYMS:
+                expanded_words.append(HINGLISH_INVENTORY_SYNONYMS[w])
+        expanded_phrase = " ".join(expanded_words)
+
+        action = None
+        for kw in ADD_KEYWORDS:
+            if re.search(r'\b' + re.escape(kw) + r'\b', phrase) or re.search(r'\b' + re.escape(kw) + r'\b', expanded_phrase):
+                action = "add"
+                break
+        if action is None:
+            for kw in DEDUCT_KEYWORDS:
+                if re.search(r'\b' + re.escape(kw) + r'\b', phrase) or re.search(r'\b' + re.escape(kw) + r'\b', expanded_phrase):
+                    action = "deduct"
+                    break
+        if action is None:
+            action = "add"
+
+        qty = 1
+        numbers = re.findall(r'\b\d+\b', phrase)
+        if numbers:
+            qty = int(numbers[0])
+        else:
+            for w in words:
+                if w in QUANTITY_WORDS:
+                    qty = QUANTITY_WORDS[w]
+                    break
+
+        clean_words = []
+        for w in words:
+            if w in ADD_KEYWORDS or w in DEDUCT_KEYWORDS or w in QUANTITY_WORDS or w.isdigit() or w in {"packet", "packets", "box", "boxes", "piece", "pieces", "kg", "kgs", "g", "gm", "ml", "l", "litre", "litres", "bottle", "bottles", "item", "items"}:
+                continue
+            clean_words.append(w)
+
+        search_query = " ".join(clean_words) if clean_words else phrase
+
+        sq_words = search_query.split()
+        for w in list(sq_words):
+            if w in HINGLISH_INVENTORY_SYNONYMS:
+                sq_words.append(HINGLISH_INVENTORY_SYNONYMS[w])
+        search_query_expanded = " ".join(sq_words)
+
+        best_match = None
+        best_conf = 0.0
+
+        for p in products:
+            m1, c1 = fuzzy_match(search_query_expanded, [p], min_confidence=0.30)
+            m2, c2 = fuzzy_match(expanded_phrase, [p], min_confidence=0.30)
+            m3, c3 = fuzzy_match(search_query, [p], min_confidence=0.30)
+
+            m = m1 or m2 or m3
+            c = max(c1, c2, c3)
+            if m and c > best_conf:
+                best_match = m
+                best_conf = c
+
+        if best_match:
+            curr_qty = int(best_match.get("current_qty") or 0)
+            new_qty = (curr_qty + qty) if action == "add" else max(0, curr_qty - qty)
+            results.append({
+                "action": action,
+                "product_id": best_match["id"],
+                "product_name": best_match["name"],
+                "qty": qty,
+                "current_qty": curr_qty,
+                "new_qty": new_qty,
+                "confidence": round(best_conf, 3)
+            })
+
+    return results
